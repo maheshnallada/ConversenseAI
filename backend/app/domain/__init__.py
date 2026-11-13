@@ -1,0 +1,1 @@
+"""Canonical interaction contracts."""
