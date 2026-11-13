@@ -97,6 +97,34 @@ class TurnRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class InteractionTimelineRow(Base):
+    __tablename__ = "interaction_timelines"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "interaction_id",
+            name="uq_interaction_timeline",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    total_duration_s: Mapped[float] = mapped_column(Float)
+    agent_turn_count: Mapped[int] = mapped_column(Integer)
+    customer_turn_count: Mapped[int] = mapped_column(Integer)
+    overlap_count: Mapped[int] = mapped_column(Integer)
+    total_overlap_s: Mapped[float] = mapped_column(Float)
+    first_technical_failure_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_technical_failure_turn: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_technical_failure_time_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    first_conversational_failure_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_conversational_failure_turn: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_conversational_failure_time_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    timeline_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ImportRunRow(Base):
     __tablename__ = "import_runs"
 

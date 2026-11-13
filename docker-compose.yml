@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: conversense_db
+    environment:
+      POSTGRES_USER: conversense
+      POSTGRES_PASSWORD: conversense_secret
+      POSTGRES_DB: conversense
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U conversense -d conversense"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: conversense_backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://conversense:conversense_secret@db:5432/conversense
+      ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
+    ports:
+      - "8000:8000"
+    volumes:
+      - artifacts_data:/app/backend/storage/artifacts
+      - ./data:/app/data:ro
+
+volumes:
+  pgdata:
+  artifacts_data:
+
