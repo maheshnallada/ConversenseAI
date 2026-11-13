@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -64,6 +64,36 @@ class ArtifactRow(Base):
     source_path: Mapped[str] = mapped_column(Text)
     validation_status: Mapped[str] = mapped_column(String(32))  # "valid", "warning", "error", "silent"
     validation_details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class TurnRow(Base):
+    __tablename__ = "interaction_turns"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "interaction_id",
+            "turn_index",
+            name="uq_interaction_turn",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    turn_id: Mapped[str] = mapped_column(String(128))
+    turn_index: Mapped[int] = mapped_column(Integer)
+    speaker: Mapped[str] = mapped_column(String(32))  # "agent", "customer"
+    raw_text: Mapped[str] = mapped_column(Text)
+    normalized_text: Mapped[str] = mapped_column(Text)
+    start_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    playback_spoken: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    playback_heard_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audio_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    barged_in: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

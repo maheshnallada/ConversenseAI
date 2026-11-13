@@ -9,8 +9,10 @@ from sqlalchemy import select
 
 from app.ingestion.mapper import map_call_folder
 from app.ingestion.service import IngestionService
+from app.reconstruction.processor import TranscriptProcessor
 from app.storage.artifacts import ArtifactStore
 from app.storage.orm import ArtifactRow, ImportRunRow
+from app.storage.transcript_repo import TranscriptRepository
 
 
 @dataclass
@@ -55,6 +57,8 @@ class BatchImporter:
         self.artifact_store = artifact_store
         self.tenant_id = tenant_id
         self.service = IngestionService(session_factory)
+        self.turn_processor = TranscriptProcessor()
+        self.turn_repo = TranscriptRepository(session_factory)
 
     def import_directory(
         self,
@@ -121,6 +125,18 @@ class BatchImporter:
                     newly_created += 1
                 else:
                     replayed += 1
+
+                # Normalize and persist transcript turns
+                turns = self.turn_processor.process_folder(
+                    call_folder=folder,
+                    tenant_id=self.tenant_id,
+                )
+                if turns:
+                    self.turn_repo.save_turns(
+                        tenant_id=self.tenant_id,
+                        interaction_id=envelope.interaction_id,
+                        turns=turns,
+                    )
 
                 # Persist ArtifactRows idempotently
                 with self.session_factory() as session:
