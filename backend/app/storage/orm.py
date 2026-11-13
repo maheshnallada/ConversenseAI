@@ -161,6 +161,36 @@ class ObservabilityMetricsRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class EvaluationResultRow(Base):
+    __tablename__ = "evaluation_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "interaction_id",
+            "evaluator_id",
+            "evaluator_version",
+            name="uq_evaluation_result",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluator_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluator_version: Mapped[str] = mapped_column(String(32))
+    family: Mapped[str] = mapped_column(String(64))
+    method: Mapped[str] = mapped_column(String(32))
+    label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    review_status: Mapped[str] = mapped_column(String(32), index=True)
+    evidence_json: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    details_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ImportRunRow(Base):
     __tablename__ = "import_runs"
 
