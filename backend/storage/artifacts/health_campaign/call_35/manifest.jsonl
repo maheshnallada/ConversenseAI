@@ -1,0 +1,4 @@
+{"turn": 1, "user_wav": "turn_001_user.wav", "seconds": 36.34, "transcript": ""}
+{"turn": 2, "user_wav": "turn_002_user.wav", "seconds": 10.25, "transcript": "नहीं नहीं कल से L one का।"}
+{"turn": 3, "user_wav": "turn_003_user.wav", "seconds": 4.86, "transcript": "हाँ।"}
+{"turn": "tail", "user_wav": "turn_tail_user.wav", "seconds": 0.9, "transcript": ""}

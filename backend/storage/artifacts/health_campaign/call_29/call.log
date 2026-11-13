@@ -1,0 +1,109 @@
+════════════════════════════════════════════════════════════════════
+CALL cust_089_phone-60f938f1-a1684ba886
+started 2026-11-03 04:21:18 local · brain gemini/gemini-3.5-flash-lite · profile=default policy_id=- policy_source=custom_agent
+════════════════════════════════════════════════════════════════════
+call_key=cust_089_01a19fa3-db5e-7fec-8e4d-ed1333c281b7 · convo_id=01a19fa3-db5e-7fec-8e4d-ed1333c281b7 · room=phone-60f938f1-a1684ba886
+  NOTE · 04:21:21 · phone answered after 3866 ms of ringing
+
+────────────────────────────────────────────────────────────────────
+AGENT (greeting — verbatim from flow, no LLM) · 04:21:21
+    Hello, क्या मेरी बात सुमीत जी से हो रही है?
+────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════
+TURN 1 · 04:21:26
+════════════════════════════════════════════════════════════════════
+USER: Hi. If you record your name and reason for calling, I'll see if this person is available.
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT (CUT OFF — the caller heard only: “Hi, this is Priya from PolicyGuru, calling about health insurance.”): Hi, this is Priya from PolicyGuru, calling about health insurance.
+
+════════════════════════════════════════════════════════════════════
+TURN 2 · 04:21:49
+════════════════════════════════════════════════════════════════════
+USER: Thanks. PolicyGuru. Please stay on the line.
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT (NOT SPOKEN — cut before any audio played): (nothing)
+
+════════════════════════════════════════════════════════════════════
+TURN 3 · 04:22:13
+════════════════════════════════════════════════════════════════════
+USER: I'm sorry, this person is not available
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT (NOT SPOKEN — early reply dropped, the caller kept talking): (nothing)
+
+════════════════════════════════════════════════════════════════════
+TURN 4 · 04:22:16
+════════════════════════════════════════════════════════════════════
+USER: I'm sorry, this person is not available if you would like to leave an additional message, please
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT (NOT SPOKEN — early reply dropped, the caller kept talking): Hello सुमीत जी, मैं Priya, PolicyGuru से। Health insurance पर एक free expert consultation के लिए call किया था। हम आपको फिर से call करेंगे। Thank you!
+
+════════════════════════════════════════════════════════════════════
+TURN 5 · 04:22:17
+════════════════════════════════════════════════════════════════════
+USER: I'm sorry, this person is not available if you would like to leave an additional message, please reply after the tone.
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT: Hello सुमीत जी, मैं Priya, PolicyGuru से। Health insurance पर एक free expert consultation के लिए call किया था। हम आपको फिर से call करेंगे। Thank you!
+
+════════════════════════════════════════════════════════════════════
+CALL ENDED 04:23:00 · disposition=VOICEMAIL · last state=conversation
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+CONVERSATION FLOW
+════════════════════════════════════════════════════════════════════
+
+  T1   ?              conversation          flow    verbatim
+       │ “Hi. If you record your name and reason for calling,…”
+       ✂ reply cut off part-way
+       ▼ custom_agent
+
+  T2     ⋮            conversation          flow    verbatim
+       │ “Thanks. PolicyGuru. Please stay on the line.”
+       ✗ reply never spoken
+       ▼ custom_agent
+
+  T3     ⋮            conversation          flow    verbatim
+       │ “I'm sorry, this person is not available”
+       ✗ reply never spoken
+       ▼ custom_agent
+
+  T4     ⋮            conversation          flow    verbatim
+       │ “I'm sorry, this person is not available if you woul…”
+       ✗ reply never spoken
+       ▼ custom_agent
+
+  T5     ⋮            conversation          flow    verbatim
+       │ “I'm sorry, this person is not available if you woul…”
+       ▼ custom_agent
+
+  ══► conversation · VOICEMAIL
+
+────────────────────────────────────────────────────────────────────
+AGENT SCORECARD
+────────────────────────────────────────────────────────────────────
+  agent           turns  llm  avg words  handler     mgr agreed  notes
+  ?                   5    0         13  flow        —
+────────────────────────────────────────────────────────────────────
+  mgr agreed = turns where the shadow state manager named the agent the
+  call actually used. Blank where it was not allowed to answer.

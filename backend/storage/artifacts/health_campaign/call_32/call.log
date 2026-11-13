@@ -1,0 +1,15 @@
+════════════════════════════════════════════════════════════════════
+CALL cust_092_phone-60f938f1-9c8240ddcb
+started 2026-11-03 04:20:30 local · brain gemini/gemini-3.5-flash-lite · profile=default policy_id=- policy_source=custom_agent
+════════════════════════════════════════════════════════════════════
+call_key=cust_092_01a19fa3-223c-7b60-ab55-d468c4d70a55 · convo_id=01a19fa3-223c-7b60-ab55-d468c4d70a55 · room=phone-60f938f1-9c8240ddcb
+  NOTE · 04:20:35 · phone answered after 6039 ms of ringing
+
+────────────────────────────────────────────────────────────────────
+AGENT (greeting — verbatim from flow, no LLM) · 04:20:36
+    Hello, क्या मेरी बात विश्वेश्वर जी से हो रही है?
+────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════
+CALL ENDED 04:20:43 · disposition=call_dropped · last state=conversation
+════════════════════════════════════════════════════════════════════

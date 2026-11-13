@@ -1,0 +1,10 @@
+════════════════════════════════════════════════════════════════════
+CALL cust_085_call-c502-85458f9b
+started 2026-11-05 08:30:33 local · brain gemini/gemini-3.5-flash-lite · profile=default policy_id=- policy_source=custom_agent
+════════════════════════════════════════════════════════════════════
+call_key=cust_085_01a1aad4-c4d9-739d-93b9-40bbf347a3c1 · convo_id=01a1aad4-c4d9-739d-93b9-40bbf347a3c1 · room=call-c502-85458f9b
+  NOTE · 08:31:04 · phone NOT answered: no_answer (USER_UNAVAILABLE)
+
+════════════════════════════════════════════════════════════════════
+CALL ENDED 08:31:06 · disposition=no_answer · last state=conversation
+════════════════════════════════════════════════════════════════════

@@ -1,0 +1,5 @@
+{"turn": 0, "agent_wav": "turn_000_agent.wav", "seconds": 2.31, "at_s": 9.19, "text": "Hello, क्या मेरी बात फ़ारूक़ जी से हो रही है?"}
+{"turn": 1, "agent_wav": "turn_001_agent.wav", "seconds": 1.68, "at_s": 13.25, "text": "मैं"}
+{"turn": 2, "agent_wav": "turn_002_agent.wav", "seconds": 8.37, "at_s": 15.02, "text": "जी, मैं Priya, PolicyGuru से। Health insurance पे एक exclusive Diwali offer के बारे में बताना चाहती हूँ। क्या आपने अभी कोई health insurance ले रखी है?"}
+{"turn": 3, "agent_wav": "turn_003_agent.wav", "seconds": 11.86, "at_s": 27.96, "text": "ठीक है। Company की policy अच्छी शुरुआत है, पर इसमें अक्सर सब कुछ cover नहीं होता, और job बदलने पे ये खत्म हो जाती है। क्या आपको पता है आपकी company policy में कितना"}
+{"turn": 4, "agent_wav": "turn_004_agent.wav", "seconds": 3.37, "at_s": 44.7, "text": "ठीक है, आपने time दिया उसके लिए thank you। आपका दिन अच्छा रहे!"}

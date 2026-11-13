@@ -1,0 +1,4 @@
+{"turn": 0, "agent_wav": "turn_000_agent.wav", "seconds": 5.41, "at_s": 15.85, "text": "जी, आवाज़ आ रही है मेरी?"}
+{"turn": 1, "agent_wav": "turn_001_agent.wav", "seconds": 0.05, "at_s": 35.91, "text": "जी, आवाज़ आ रही है मेरी?"}
+{"turn": 2, "agent_wav": "turn_002_agent.wav", "seconds": 9.16, "at_s": 40.89, "text": "Hello? आप सुन रहे हैं?"}
+{"turn": 3, "agent_wav": "turn_003_agent.wav", "seconds": 9.29, "at_s": 60.75, "text": "मैं Priya, PolicyGuru की health insurance team से। हम health insurance advisors हैं, और ये एक free information call है, कुछ बेचने के लिए नहीं। क्या"}

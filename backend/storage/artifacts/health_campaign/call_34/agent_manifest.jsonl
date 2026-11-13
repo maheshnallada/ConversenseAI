@@ -1,0 +1,3 @@
+{"turn": 0, "agent_wav": "turn_000_agent.wav", "seconds": 2.16, "at_s": 11.5, "text": "Hello, क्या मेरी बात मीरा जी से हो रही है?"}
+{"turn": 1, "agent_wav": "turn_001_agent.wav", "seconds": 8.94, "at_s": 16.24, "text": "Hello? आप सुन रहे हैं?"}
+{"turn": 2, "agent_wav": "turn_002_agent.wav", "seconds": 6.88, "at_s": 45.96, "text": "मैं Priya, PolicyGuru से। Health insurance पे एक exclusive"}

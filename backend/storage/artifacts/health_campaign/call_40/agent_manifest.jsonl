@@ -1,0 +1,3 @@
+{"turn": 0, "agent_wav": "turn_000_agent.wav", "seconds": 5.17, "text": "Hello, मैं Priya, PolicyGuru से बात कर रही हूँ। क्या मेरी बात हारिस जी से हो रही है?"}
+{"turn": 1, "agent_wav": "turn_001_agent.wav", "seconds": 6.87, "text": "मेरे पास आपके लिए एक exclusive offer है, पर उससे पहले एक चीज़ समझना चाहूँगी: क्या आपके पास अभी कोई health insurance policy है?"}
+{"turn": 2, "agent_wav": "turn_002_agent.wav", "seconds": 3.87, "text": "ठीक है, आपने time दिया उसके लिए thank you। आपका दिन अच्छा रहे!"}

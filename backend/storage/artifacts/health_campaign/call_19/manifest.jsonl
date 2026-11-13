@@ -1,0 +1,3 @@
+{"turn": 1, "user_wav": "turn_001_user.wav", "seconds": 23.13, "transcript": ""}
+{"turn": 2, "user_wav": "turn_002_user.wav", "seconds": 8.48, "transcript": "ब ोलो।"}
+{"turn": "tail", "user_wav": "turn_tail_user.wav", "seconds": 5.25, "transcript": ""}

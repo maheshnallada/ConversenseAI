@@ -1,0 +1,93 @@
+════════════════════════════════════════════════════════════════════
+CALL cust_097_call-c199-f5cfa365
+started 2026-11-05 06:57:37 local · brain gemini/gemini-3.5-flash-lite · profile=default policy_id=- policy_source=custom_agent
+════════════════════════════════════════════════════════════════════
+call_key=cust_097_01a1aa7f-b24f-7f7f-9717-3149c47833c5 · convo_id=01a1aa7f-b24f-7f7f-9717-3149c47833c5 · room=call-c199-f5cfa365
+  NOTE · 06:57:58 · phone answered after 18902 ms of ringing
+
+────────────────────────────────────────────────────────────────────
+AGENT (greeting — verbatim from flow, no LLM) · 06:57:58
+    Hello, क्या मेरी बात प्रीति जी से हो रही है?
+────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════
+TURN 1 · 06:58:01
+════════════════════════════════════════════════════════════════════
+USER: Your call has been forwarded to voicemail
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT (NOT SPOKEN — early reply dropped, the caller kept talking): (nothing)
+
+════════════════════════════════════════════════════════════════════
+TURN 2 · 06:58:04
+════════════════════════════════════════════════════════════════════
+USER: Your call has been forwarded to voicemail The person you're trying to reach is not available
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT (NOT SPOKEN — early reply dropped, the caller kept talking): (nothing)
+
+════════════════════════════════════════════════════════════════════
+TURN 3 · 06:58:05
+════════════════════════════════════════════════════════════════════
+USER: Your call has been forwarded to voicemail The person you're trying to reach is not available At the
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT (NOT SPOKEN — early reply dropped, the caller kept talking): (nothing)
+
+════════════════════════════════════════════════════════════════════
+TURN 4 · 06:58:10
+════════════════════════════════════════════════════════════════════
+USER: Your call has been forwarded to voicemail The person you're trying to reach is not available At the tone, please record you r message message. When you have finished recording, you may hang up
+
+INTENT: (call start) → conversation (reason: custom_agent)
+
+LLM: not called — scripted/static line served verbatim
+
+AGENT: Hello प्रीति जी, मैं Priya, PolicyGuru से। Health insurance पर एक free expert consultation के लिए call किया था। हम आपको फिर से call करेंगे। Thank you!
+
+════════════════════════════════════════════════════════════════════
+CALL ENDED 06:58:21 · disposition=VOICEMAIL · last state=conversation
+════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════
+CONVERSATION FLOW
+════════════════════════════════════════════════════════════════════
+
+  T1   ?              conversation          flow    verbatim
+       │ “Your call has been forwarded to voicemail”
+       ✗ reply never spoken
+       ▼ custom_agent
+
+  T2     ⋮            conversation          flow    verbatim
+       │ “Your call has been forwarded to voicemail The perso…”
+       ✗ reply never spoken
+       ▼ custom_agent
+
+  T3     ⋮            conversation          flow    verbatim
+       │ “Your call has been forwarded to voicemail The perso…”
+       ✗ reply never spoken
+       ▼ custom_agent
+
+  T4     ⋮            conversation          flow    verbatim
+       │ “Your call has been forwarded to voicemail The perso…”
+       ▼ custom_agent
+
+  ══► conversation · VOICEMAIL
+
+────────────────────────────────────────────────────────────────────
+AGENT SCORECARD
+────────────────────────────────────────────────────────────────────
+  agent           turns  llm  avg words  handler     mgr agreed  notes
+  ?                   4    0          7  flow        —
+────────────────────────────────────────────────────────────────────
+  mgr agreed = turns where the shadow state manager named the agent the
+  call actually used. Blank where it was not allowed to answer.

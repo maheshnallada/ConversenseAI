@@ -1,0 +1,4 @@
+{"turn": 0, "agent_wav": "turn_000_agent.wav", "seconds": 2.92, "at_s": 18.38, "text": "Hello, क्या मेरी बात वेंकटपति जी से हो"}
+{"turn": 1, "agent_wav": "turn_001_agent.wav", "seconds": 4.12, "at_s": 23.17, "text": "जी, मैं Priya, PolicyGuru से। क्या मेरी बात वेंकटपति जी से हो रही है?"}
+{"turn": 2, "agent_wav": "turn_002_agent.wav", "seconds": 7.85, "at_s": 33.07, "text": "मैं Priya, PolicyGuru से। Health insurance पे एक exclusive Diwali offer के बारे में बताना चाहती हूँ। क्या आपने अभी कोई health insurance ले रखी है?"}
+{"turn": 4, "agent_wav": "turn_004_agent.wav", "seconds": 10.97, "at_s": 52.37, "text": "अच्छी बात है। ऐसे schemes में एक तय list के hospitals और treatments cover होते हैं। क्या आप एक expert से"}

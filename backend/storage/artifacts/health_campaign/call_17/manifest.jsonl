@@ -1,0 +1,5 @@
+{"turn": 1, "user_wav": "turn_001_user.wav", "seconds": 29.79, "transcript": ""}
+{"turn": 2, "user_wav": "turn_002_user.wav", "seconds": 10.44, "transcript": "Okay."}
+{"turn": 3, "user_wav": "turn_003_user.wav", "seconds": 9.59, "transcript": "Okay,"}
+{"turn": 4, "user_wav": "turn_004_user.wav", "seconds": 1.57, "transcript": "madam."}
+{"turn": "tail", "user_wav": "turn_tail_user.wav", "seconds": 9.39, "transcript": ""}

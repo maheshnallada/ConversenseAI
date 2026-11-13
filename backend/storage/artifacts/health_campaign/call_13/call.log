@@ -1,0 +1,10 @@
+════════════════════════════════════════════════════════════════════
+CALL cust_073_call-c210-212909d3
+started 2026-11-05 06:59:57 local · brain gemini/gemini-3.5-flash-lite · profile=default policy_id=- policy_source=custom_agent
+════════════════════════════════════════════════════════════════════
+call_key=cust_073_01a1aa81-d49c-7412-95c4-b16172c0f835 · convo_id=01a1aa81-d49c-7412-95c4-b16172c0f835 · room=call-c210-212909d3
+  NOTE · 07:00:28 · phone NOT answered: no_answer (USER_UNAVAILABLE)
+
+════════════════════════════════════════════════════════════════════
+CALL ENDED 07:00:30 · disposition=no_answer · last state=conversation
+════════════════════════════════════════════════════════════════════

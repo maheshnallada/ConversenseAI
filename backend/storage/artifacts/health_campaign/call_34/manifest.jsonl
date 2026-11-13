@@ -1,0 +1,4 @@
+{"turn": 1, "user_wav": "turn_001_user.wav", "seconds": 15.18, "transcript": ""}
+{"turn": 2, "user_wav": "turn_002_user.wav", "seconds": 29.38, "transcript": "Hello?"}
+{"turn": 3, "user_wav": "turn_003_user.wav", "seconds": 5.06, "transcript": "क्या ना madam बोलो क्या"}
+{"turn": "tail", "user_wav": "turn_tail_user.wav", "seconds": 0.37, "transcript": ""}

@@ -1,0 +1,10 @@
+{"turn": 0, "agent_wav": "turn_000_agent.wav", "seconds": 2.53, "at_s": 11.23, "text": "Hello, क्या मेरी बात चन्द्रपाल जी से हो रही है?"}
+{"turn": 1, "agent_wav": "turn_001_agent.wav", "seconds": 2.98, "at_s": 21.38, "text": "मैं Priya, PolicyGuru से। क्या आप सुन पा रहे हैं?"}
+{"turn": 2, "agent_wav": "turn_002_agent.wav", "seconds": 6.19, "at_s": 28.14, "text": "Health insurance पे एक exclusive Diwali offer के बारे में बताना चाहती हूँ। क्या आपने अभी कोई health insurance ले रखी है?"}
+{"turn": 3, "agent_wav": "turn_003_agent.wav", "seconds": 3.46, "at_s": 37.99, "text": "अच्छा। ये policy आपको office से मिली है, या आपने खुद ली है?"}
+{"turn": 4, "agent_wav": "turn_004_agent.wav", "seconds": 2.92, "at_s": 45.63, "text": "अच्छा, ये सिर्फ़ आपके लिए है, या family के लिए भी?"}
+{"turn": 5, "agent_wav": "turn_005_agent.wav", "seconds": 11.14, "at_s": 52.51, "text": "अच्छा। Family policy में पूरी family एक ही cover share करती है, तो एक बड़ा claim बाकी सबका cover कम कर सकता है। क्या आपको पता है आपकी policy में कितना cover है, और restoration है या नहीं?"}
+{"turn": 6, "agent_wav": "turn_006_agent.wav", "seconds": 9.98, "at_s": 68.6, "text": "ये बहुत लोगों को नहीं पता होता। एक expert free में आपकी policy देख के second view दे सकते हैं कि cover पूरी family के लिए काफ़ी है या नहीं। कल आपके लिए कब ठीक रहेगा, सुबह या शाम?"}
+{"turn": 7, "agent_wav": "turn_007_agent.wav", "seconds": 1.87, "at_s": 86.6, "text": "परसों सुबह 11 बजे ठीक रहेगा?"}
+{"turn": 8, "agent_wav": "turn_008_agent.wav", "seconds": 1.83, "at_s": 95.87, "text": "परसों सुबह 11 बजे ठीक रहेगा?"}
+{"turn": 9, "agent_wav": "turn_009_agent.wav", "seconds": 3.09, "at_s": 101.51, "text": "ठीक है,"}
