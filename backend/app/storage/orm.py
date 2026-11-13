@@ -125,6 +125,42 @@ class InteractionTimelineRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ObservabilityMetricsRow(Base):
+    __tablename__ = "observability_metrics"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "interaction_id",
+            name="uq_observability_metrics",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    recording_duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    telephony_duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    turn_count: Mapped[int] = mapped_column(Integer)
+    agent_turn_count: Mapped[int] = mapped_column(Integer)
+    customer_turn_count: Mapped[int] = mapped_column(Integer)
+    first_agent_latency_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_response_latency_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p50_response_latency_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p90_response_latency_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p95_response_latency_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p99_response_latency_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longest_silence_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    overlap_count: Mapped[int] = mapped_column(Integer)
+    total_overlap_s: Mapped[float] = mapped_column(Float)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_currency: Mapped[str] = mapped_column(String(16))
+    metrics_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ImportRunRow(Base):
     __tablename__ = "import_runs"
 

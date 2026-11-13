@@ -147,8 +147,13 @@ def map_call_folder(
     usage = meta.get("usage") or {}
     llm_usage = usage.get("llm") or {}
 
-    input_tokens = llm_usage.get("total_input_tokens") or llm_usage.get("estimated_input_tokens")
-    output_tokens = llm_usage.get("total_output_tokens") or llm_usage.get("estimated_output_tokens")
+    input_tokens = llm_usage.get("input_tokens")
+    if input_tokens is None:
+        input_tokens = llm_usage.get("total_input_tokens") or llm_usage.get("estimated_input_tokens")
+
+    output_tokens = llm_usage.get("output_tokens")
+    if output_tokens is None:
+        output_tokens = llm_usage.get("total_output_tokens") or llm_usage.get("estimated_output_tokens")
 
     execution = Execution(
         provider=models.get("provider"),
