@@ -1,7 +1,7 @@
-<<<<<<< HEAD
 import base64
 import io
 import json
+import os
 import uuid
 import zipfile
 from dataclasses import asdict
@@ -9,21 +9,11 @@ from pathlib import Path
 from typing import Annotated, Any, Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
-from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from sqlalchemy import select
-=======
-import os
-from typing import Annotated, Optional, List, Dict, Any
-from pathlib import Path
-from dataclasses import asdict
-
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
->>>>>>> main
+from sqlalchemy import select
 
 from app.analytics.service import AnalyticsService
 from app.core.logging import TraceLoggingMiddleware, configure_logging, get_logger
@@ -31,23 +21,15 @@ from app.domain.envelope import InteractionEnvelope
 from app.evaluation.service import EvaluationService
 from app.ingestion.errors import IdempotencyConflict
 from app.ingestion.service import IngestResult, IngestionService
-<<<<<<< HEAD
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.golden_repo import GoldenDatasetRepository
-from app.storage.orm import ArtifactRow, InteractionRow
+from app.storage.orm import ArtifactRow
 from app.storage.review_repo import HumanReviewRepository
 from app.storage.timeline_repo import TimelineRepository
 from app.validation.benchmark import BenchmarkEngine
 from app.validation.golden_loader import load_golden_dataset
 
 logger = get_logger("conversense.api")
-=======
-from app.evaluation.service import EvaluationService
-from app.storage.evaluation_repo import EvaluationRepository
-from app.storage.golden_repo import GoldenDatasetRepository
-from app.validation.golden_loader import load_golden_dataset
-from app.validation.benchmark import BenchmarkEngine
->>>>>>> main
 
 
 class IngestResponse(BaseModel):
@@ -57,8 +39,9 @@ class IngestResponse(BaseModel):
 
 class ProcessFolderRequest(BaseModel):
     call_folder_path: str
-<<<<<<< HEAD
-    tenant_id: Optional[str] = "health_campaign"
+    tenant_id: Optional[str] = Field(
+        default_factory=lambda: os.getenv("TENANT_ID", "health_campaign")
+    )
 
 
 class UploadFilesRequest(BaseModel):
@@ -68,7 +51,9 @@ class UploadFilesRequest(BaseModel):
     call_log: Optional[str] = None
     recording_base64: Optional[str] = None
     folder_name: Optional[str] = None
-    tenant_id: Optional[str] = "health_campaign"
+    tenant_id: Optional[str] = Field(
+        default_factory=lambda: os.getenv("TENANT_ID", "health_campaign")
+    )
 
 
 class ImportGoldenRequest(BaseModel):
@@ -109,21 +94,6 @@ def create_app(session_factory) -> FastAPI:
                 },
             )
 
-=======
-    tenant_id: Optional[str] = Field(
-        default_factory=lambda: os.getenv("TENANT_ID", "health_campaign")
-    )
-
-
-class ImportGoldenRequest(BaseModel):
-    csv_path: Optional[str] = None
-
-
-def create_app(session_factory) -> FastAPI:
-    app = FastAPI(title="Conversense AI - Health Call Observability & Evaluation")
-    app.state.session_factory = session_factory
-
->>>>>>> main
     def get_ingest_service() -> IngestionService:
         return IngestionService(session_factory)
 
@@ -136,7 +106,6 @@ def create_app(session_factory) -> FastAPI:
     def get_golden_repo() -> GoldenDatasetRepository:
         return GoldenDatasetRepository(session_factory)
 
-<<<<<<< HEAD
     def get_timeline_repo() -> TimelineRepository:
         return TimelineRepository(session_factory)
 
@@ -146,8 +115,6 @@ def create_app(session_factory) -> FastAPI:
     def get_analytics_service() -> AnalyticsService:
         return AnalyticsService(session_factory)
 
-    # Ingestion Endpoints
-=======
     def require_tenant_id(
         x_tenant_id: Annotated[str | None, Header()] = None,
     ) -> str:
@@ -155,7 +122,7 @@ def create_app(session_factory) -> FastAPI:
             raise HTTPException(status_code=401, detail="X-Tenant-Id is required")
         return x_tenant_id
 
->>>>>>> main
+    # Ingestion Endpoints
     @app.post("/api/v1/interactions", response_model=IngestResponse)
     def ingest_interaction(
         body: InteractionEnvelope,
@@ -174,23 +141,21 @@ def create_app(session_factory) -> FastAPI:
     # Selector List (For dynamic dropdown population)
     @app.get("/api/v1/interactions-list")
     def list_interactions_selector(
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         return get_analytics_service().get_interactions_selector_list(tenant_id)
 
     # Interaction List (Paginated & Filterable)
     @app.get("/api/v1/interactions")
     def list_interactions(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=100),
         status: Optional[str] = Query(default=None),
         outcome: Optional[str] = Query(default=None),
         quality: Optional[str] = Query(default=None),
         search: Optional[str] = Query(default=None),
-        x_tenant_id: Annotated[str | None, Header()] = None,
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         return get_analytics_service().get_interactions_page(
             tenant_id=tenant_id,
             page=page,
@@ -206,26 +171,19 @@ def create_app(session_factory) -> FastAPI:
         interaction_id: str,
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-<<<<<<< HEAD
-        tenant_id = x_tenant_id or "health_campaign"
         service = get_eval_service()
         resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
         found = get_ingest_service().get(tenant_id, resolved_id)
-=======
-        found = get_ingest_service().get(tenant_id, interaction_id)
->>>>>>> main
         if found is None:
             raise HTTPException(status_code=404, detail="Interaction not found")
         return found
 
-<<<<<<< HEAD
     # Reconstructed Timeline Endpoint
     @app.get("/api/v1/interactions/{interaction_id}/timeline")
     def get_interaction_timeline(
         interaction_id: str,
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         service = get_eval_service()
         resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
         timeline = get_timeline_repo().get_timeline(tenant_id, resolved_id)
@@ -237,9 +195,8 @@ def create_app(session_factory) -> FastAPI:
     @app.get("/api/v1/interactions/{interaction_id}/audio")
     def get_interaction_audio(
         interaction_id: str,
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         service = get_eval_service()
         resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
 
@@ -309,16 +266,8 @@ def create_app(session_factory) -> FastAPI:
     @app.post("/api/v1/interactions/{interaction_id}/evaluate")
     def evaluate_interaction(
         interaction_id: str,
-        x_tenant_id: Annotated[str | None, Header()] = None,
-    ):
-        tenant_id = x_tenant_id or "health_campaign"
-=======
-    @app.post("/api/v1/interactions/{interaction_id}/evaluate")
-    def evaluate_interaction(
-        interaction_id: str,
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
->>>>>>> main
         try:
             results = get_eval_service().evaluate_interaction(tenant_id, interaction_id)
         except ValueError as exc:
@@ -347,14 +296,8 @@ def create_app(session_factory) -> FastAPI:
     @app.get("/api/v1/interactions/{interaction_id}/evaluations")
     def get_interaction_evaluations(
         interaction_id: str,
-<<<<<<< HEAD
-        x_tenant_id: Annotated[str | None, Header()] = None,
-    ):
-        tenant_id = x_tenant_id or "health_campaign"
-=======
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
->>>>>>> main
         service = get_eval_service()
         resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
         results = get_eval_repo().get_by_interaction(tenant_id, resolved_id)
@@ -379,15 +322,13 @@ def create_app(session_factory) -> FastAPI:
             for r in results
         ]
 
-<<<<<<< HEAD
     # Human Review Endpoints
     @app.post("/api/v1/interactions/{interaction_id}/reviews")
     def submit_interaction_review(
         interaction_id: str,
         body: HumanReviewSubmission,
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         service = get_eval_service()
         resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
 
@@ -406,9 +347,8 @@ def create_app(session_factory) -> FastAPI:
     @app.get("/api/v1/interactions/{interaction_id}/reviews")
     def list_interaction_reviews(
         interaction_id: str,
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         service = get_eval_service()
         resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
         return get_review_repo().get_reviews_for_interaction(tenant_id, resolved_id)
@@ -416,23 +356,20 @@ def create_app(session_factory) -> FastAPI:
     # Analytics Endpoints
     @app.get("/api/v1/analytics/overview")
     def get_overview_analytics(
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         return get_analytics_service().get_overview_analytics(tenant_id)
 
     @app.get("/api/v1/analytics/quality")
     def get_quality_analytics(
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         return get_analytics_service().get_quality_analytics(tenant_id)
 
     @app.get("/api/v1/analytics/cost")
     def get_cost_analytics(
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         return get_analytics_service().get_cost_analytics(tenant_id)
 
     # Use Cases & Evaluator Registry Endpoints
@@ -463,18 +400,10 @@ def create_app(session_factory) -> FastAPI:
     @app.post("/api/v1/interactions/process-and-evaluate")
     def process_and_evaluate_folder(
         body: ProcessFolderRequest,
-        x_tenant_id: Annotated[str | None, Header()] = None,
-    ):
-        tenant_id = x_tenant_id or body.tenant_id or "health_campaign"
-=======
-    @app.post("/api/v1/interactions/process-and-evaluate")
-    def process_and_evaluate_folder(
-        body: ProcessFolderRequest,
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
         if "tenant_id" in body.model_fields_set and body.tenant_id and tenant_id != body.tenant_id:
             raise HTTPException(status_code=403, detail="Tenant header does not match body")
->>>>>>> main
         try:
             report = get_eval_service().process_and_evaluate_folder(
                 call_folder_path=body.call_folder_path,
@@ -484,7 +413,6 @@ def create_app(session_factory) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
-<<<<<<< HEAD
             logger.error(f"Error processing folder: {exc}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -492,10 +420,8 @@ def create_app(session_factory) -> FastAPI:
     @app.post("/api/v1/interactions/upload-zip")
     async def upload_call_zip(
         request: Request,
-        tenant_id: Optional[str] = Query(default="health_campaign"),
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        effective_tenant = x_tenant_id or tenant_id or "health_campaign"
         body = await request.body()
         if not body:
             raise HTTPException(status_code=400, detail="Empty request body. Please upload a ZIP archive.")
@@ -526,7 +452,7 @@ def create_app(session_factory) -> FastAPI:
         try:
             report = get_eval_service().process_and_evaluate_folder(
                 call_folder_path=target_dir,
-                tenant_id=effective_tenant,
+                tenant_id=tenant_id,
             )
             return {
                 "success": True,
@@ -541,9 +467,14 @@ def create_app(session_factory) -> FastAPI:
     @app.post("/api/v1/interactions/upload-files")
     def upload_call_files(
         body: UploadFilesRequest,
-        x_tenant_id: Annotated[str | None, Header()] = None,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        effective_tenant = x_tenant_id or body.tenant_id or "health_campaign"
+        if (
+            "tenant_id" in body.model_fields_set
+            and body.tenant_id
+            and tenant_id != body.tenant_id
+        ):
+            raise HTTPException(status_code=403, detail="Tenant header does not match body")
         upload_id = body.folder_name or f"upload_{uuid.uuid4().hex[:12]}"
         staging_dir = Path("backend/storage/uploads") / upload_id
         staging_dir.mkdir(parents=True, exist_ok=True)
@@ -563,7 +494,7 @@ def create_app(session_factory) -> FastAPI:
         try:
             report = get_eval_service().process_and_evaluate_folder(
                 call_folder_path=staging_dir,
-                tenant_id=effective_tenant,
+                tenant_id=tenant_id,
             )
             return {
                 "success": True,
@@ -577,10 +508,9 @@ def create_app(session_factory) -> FastAPI:
     # Seed Dataset Route (Populates calls if running on fresh DB)
     @app.post("/api/v1/interactions/seed-all")
     def seed_all_calls(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
         limit: Optional[int] = Query(default=50, ge=1, le=50),
-        x_tenant_id: Annotated[str | None, Header()] = None,
     ):
-        tenant_id = x_tenant_id or "health_campaign"
         service = get_eval_service()
 
         calls_dirs = [
@@ -615,22 +545,6 @@ def create_app(session_factory) -> FastAPI:
 
     # Golden Dataset Routes
     @app.get("/api/v1/golden-dataset")
-    def list_golden_dataset():
-        labels = get_golden_repo().get_all()
-        return [asdict(l) for l in labels]
-
-    @app.post("/api/v1/golden-dataset/import")
-    def import_golden_dataset(body: Optional[ImportGoldenRequest] = None):
-        root = Path(__file__).resolve().parent.parent.parent.parent
-        csv_path = body.csv_path if (body and body.csv_path) else str(root / "data" / "golden_dataset.csv")
-        try:
-            labels = load_golden_dataset(csv_path)
-            get_golden_repo().save_many(labels)
-            return {"imported": len(labels), "path": csv_path}
-=======
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    @app.get("/api/v1/golden-dataset")
     def list_golden_dataset(
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
@@ -661,13 +575,13 @@ def create_app(session_factory) -> FastAPI:
             labels = load_golden_dataset(csv_path)
             get_golden_repo().save_many(labels)
             return {"imported": len(labels), "path": str(csv_path)}
->>>>>>> main
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/v1/golden-dataset/benchmark")
-<<<<<<< HEAD
-    def get_golden_benchmark(tenant_id: str = "health_campaign"):
+    def get_golden_benchmark(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
         golden_repo = get_golden_repo()
         eval_service = get_eval_service()
         eval_repo = get_eval_repo()
@@ -702,25 +616,6 @@ def create_app(session_factory) -> FastAPI:
         engine = BenchmarkEngine()
         report = engine.evaluate_benchmark(golden_labels, evaluations_by_call)
 
-=======
-    def get_golden_benchmark(
-        tenant_id: Annotated[str, Depends(require_tenant_id)],
-    ):
-        golden_labels = get_golden_repo().get_all()
-        if not golden_labels:
-            raise HTTPException(status_code=404, detail="No golden dataset labels loaded.")
-
-        evaluation_service = get_eval_service()
-        evaluation_repo = get_eval_repo()
-        evaluations_by_call = {}
-        for label in golden_labels:
-            resolved_id = evaluation_service.resolve_interaction_id(tenant_id, label.call_id)
-            evaluations_by_call[label.call_id] = evaluation_repo.get_by_interaction(
-                tenant_id, resolved_id
-            )
-
-        report = BenchmarkEngine().evaluate_benchmark(golden_labels, evaluations_by_call)
->>>>>>> main
         return asdict(report)
 
     return app
