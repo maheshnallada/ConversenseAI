@@ -1,0 +1,1 @@
+{"call_id": "test_call_uploaded_001", "meta": {"agent": "voice_bot", "usage": {"line": {"connected_s": 15.0}}}, "disposition": "answered", "started_at": "2026-11-14T08:00:00Z", "end_reason": "customer_ended"}

@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
@@ -42,7 +43,13 @@ class EvaluationService:
         self.obs_repo = ObservabilityRepository(session_factory)
 
         root = Path(__file__).resolve().parent.parent.parent.parent
-        self.artifact_store = artifact_store or LocalArtifactStore(root / "data" / "artifact_store")
+        env_store = (
+            os.getenv("ARTIFACT_STORAGE_PATH")
+            or os.getenv("ARTIFACT_STORE_PATH")
+            or os.getenv("ARTIFACTS_DIR")
+        )
+        resolved_store = Path(env_store) if env_store else (root / "backend" / "storage" / "artifacts")
+        self.artifact_store = artifact_store or LocalArtifactStore(resolved_store)
         self.rate_card_manager = rate_card_manager or RateCardManager(root / "configs" / "rate_cards.json")
         self.obs_service = ObservabilityService(session_factory, self.rate_card_manager)
         self.processor = TranscriptProcessor()

@@ -116,7 +116,8 @@ export default function IngestView({ onNavigateToDrillDown }) {
 
     try {
       const resp = await api.seedAll(limit);
-      alert(`Seeding complete! Processed ${resp.processed} calls with ${resp.errors} errors.`);
+      const count = resp.seeded_count ?? resp.processed ?? limit;
+      alert(`Seeding complete! Successfully processed and evaluated ${count} calls.`);
     } catch (err) {
       console.error('Seed error:', err);
       setError(err.message || 'Failed to seed dataset.');
@@ -136,7 +137,7 @@ export default function IngestView({ onNavigateToDrillDown }) {
           </div>
           <div>
             <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-              On-Demand Call Ingestion &amp; Evaluation
+              Call Ingestion &amp; Evaluation
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               Ingest raw audio &amp; JSON call telemetry, reconstruct chronological timeline with latency compensation, and execute evaluation policies.

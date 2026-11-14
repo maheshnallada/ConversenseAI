@@ -44,3 +44,30 @@ def test_nonexistent_uri_returns_false_and_raises(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         store.get_path(fake_uri)
 
+
+def test_readonly_filesystem_fallback(tmp_path: Path, monkeypatch):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    sample = source_dir / "test.json"
+    sample.write_text('{"status": "ok"}', encoding="utf-8")
+
+    # Simulate read-only directory
+    store = LocalArtifactStore(base_dir=tmp_path / "artifacts")
+    
+    # Force put_file destination mkdir to fail with Errno 30 (Read-only file system)
+    orig_mkdir = Path.mkdir
+    def mock_mkdir(self, *args, **kwargs):
+        if "artifacts" in str(self):
+            err = OSError(30, "Read-only file system")
+            err.errno = 30
+            raise err
+        return orig_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mock_mkdir)
+
+    stored = store.put_file(sample, relative_dest="tenant_1/call_18/test.json")
+    assert stored.artifact_id is not None
+    assert store.exists(stored.uri) is True
+    assert Path(store.get_path(stored.uri)).exists()
+
+
