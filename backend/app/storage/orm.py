@@ -223,3 +223,19 @@ class GoldenCallLabelRow(Base):
     reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+
+class HumanReviewRow(Base):
+    __tablename__ = "human_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluator_id: Mapped[str] = mapped_column(String(128), index=True)
+    original_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reviewed_label: Mapped[str] = mapped_column(String(128))
+    review_decision: Mapped[str] = mapped_column(String(32))  # ACCEPTED, OVERRIDDEN
+    reviewer_name: Mapped[str] = mapped_column(String(128))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
