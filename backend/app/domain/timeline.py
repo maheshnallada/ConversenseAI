@@ -30,3 +30,14 @@ class ReconstructedTimeline:
     first_technical_failure: FailureRecord | None = None
     first_conversational_failure: FailureRecord | None = None
 
+    @property
+    def first_agent_speech_s(self) -> float | None:
+        agent_turn_starts = [
+            event.start_s
+            for event in self.events
+            if event.event_type == "turn"
+            and event.speaker == "agent"
+            and event.start_s is not None
+        ]
+        return min(agent_turn_starts) if agent_turn_starts else None
+

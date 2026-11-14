@@ -5,11 +5,11 @@ from app.observability.config import RateCardManager
 def test_rate_card_cost_calculation():
     manager = RateCardManager()
 
-    # Gemini 3.5 Flash Lite: 1,000,000 input = $0.075, 1,000,000 output = $0.30
+    # Gemini 3.5 Flash Lite: 1,000,000 input = $0.30, 1,000,000 output = $2.50
     llm_cost = manager.calculate_llm_cost("gemini-3.5-flash-lite", input_tokens=100000, output_tokens=10000)
-    # 0.1 * 0.075 = 0.0075 + 0.01 * 0.30 = 0.003 -> total = 0.0105
+    # 0.1 * 0.30 = 0.03 + 0.01 * 2.50 = 0.025 -> total = 0.055
     assert llm_cost is not None
-    assert round(llm_cost, 4) == 0.0105
+    assert round(llm_cost, 4) == 0.055
 
     # GPT-4o Mini: 1,000,000 input = $0.15, 1,000,000 output = $0.60
     gpt_cost = manager.calculate_llm_cost("gpt-4o-mini", input_tokens=100000, output_tokens=10000)
@@ -26,6 +26,40 @@ def test_rate_card_cost_calculation():
     line_cost = manager.calculate_telephony_cost(connected_s=120.0)
     assert line_cost is not None
     assert round(line_cost, 4) == 0.02
+
+
+@pytest.mark.parametrize(
+    ("input_tokens", "output_tokens"),
+    [(-1, 0), (0, -1), (-1, -1)],
+)
+def test_negative_token_counts_are_rejected(input_tokens, output_tokens):
+    manager = RateCardManager()
+
+    assert manager.calculate_llm_cost(
+        "gemini-3.5-flash-lite",
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    ) is None
+
+
+def test_zero_token_counts_are_valid():
+    manager = RateCardManager()
+
+    assert manager.calculate_llm_cost(
+        "gemini-3.5-flash-lite",
+        input_tokens=0,
+        output_tokens=0,
+    ) == 0.0
+
+
+def test_model_rate_matching_requires_a_prefix():
+    manager = RateCardManager()
+
+    assert manager.calculate_llm_cost(
+        "unrelated-gemini-3.5-flash-lite",
+        input_tokens=1000,
+        output_tokens=1000,
+    ) is None
 
 
 def test_rate_card_total_breakdown():

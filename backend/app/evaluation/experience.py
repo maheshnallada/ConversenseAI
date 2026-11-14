@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import List, Optional, Dict, Any
 from app.domain.envelope import InteractionEnvelope
@@ -29,10 +30,19 @@ class CustomerExperienceEvaluator(BaseEvaluator):
     ) -> EvaluationResult:
         customer_turns = [t for t in turns if t.speaker == "customer"]
 
-        sentiment_label, sent_evidence = self._evaluate_sentiment(customer_turns)
-        emotion_label, emo_evidence = self._evaluate_emotion(customer_turns)
-
-        all_evidence = sent_evidence + emo_evidence
+        llm_result = (
+            self._evaluate_with_llm(customer_turns)
+            if customer_turns and self.llm_client.is_live_configured
+            else None
+        )
+        if llm_result:
+            sentiment_label, emotion_label, all_evidence = llm_result
+            method = "llm"
+        else:
+            sentiment_label, sent_evidence = self._evaluate_sentiment(customer_turns)
+            emotion_label, emo_evidence = self._evaluate_emotion(customer_turns)
+            all_evidence = sent_evidence + emo_evidence
+            method = "deterministic"
 
         return EvaluationResult(
             tenant_id=interaction.tenant_id,
@@ -40,7 +50,7 @@ class CustomerExperienceEvaluator(BaseEvaluator):
             evaluator_id=self.evaluator_id,
             evaluator_version=self.evaluator_version,
             family=self.family,
-            method="llm" if self.llm_client.is_live_configured else "deterministic",
+            method=method,
             label=sentiment_label,
             score=1.0 if sentiment_label == "Positive" else (0.5 if sentiment_label == "Neutral" else 0.0),
             confidence=0.85 if sentiment_label != "Can't tell" else 0.5,
@@ -53,6 +63,64 @@ class CustomerExperienceEvaluator(BaseEvaluator):
                 "emotion": emotion_label,
             },
         )
+
+    def _evaluate_with_llm(self, customer_turns: List[TranscriptTurn]):
+        transcript = "\n".join(
+            f"[Line {turn.turn_index}] {turn.raw_text}" for turn in customer_turns
+        )
+        prompt = (
+            "Classify the customer's overall sentiment and emotion from these customer turns only.\n"
+            f"Allowed sentiment values: {', '.join(SENTIMENT_VALUES)}\n"
+            f"Allowed emotion values: {', '.join(EMOTION_VALUES)}\n"
+            "Return one JSON object with sentiment, emotion, sentiment_evidence_line, "
+            "sentiment_quote, sentiment_reason, emotion_evidence_line, emotion_quote, "
+            "and emotion_reason. Evidence line values must refer to the supplied line numbers; "
+            "quotes must be exact text from that customer turn.\n\n"
+            f"Customer turns:\n{transcript}"
+        )
+        response = self.llm_client.chat_completion([{"role": "user", "content": prompt}])
+        if not response:
+            return None
+
+        try:
+            data = json.loads(response)
+        except json.JSONDecodeError:
+            logger.warning("Experience LLM response was not valid JSON; using deterministic classification")
+            return None
+
+        if not isinstance(data, dict):
+            logger.warning("Experience LLM response was not a JSON object; using deterministic classification")
+            return None
+
+        sentiment = data.get("sentiment")
+        emotion = data.get("emotion")
+        if sentiment not in SENTIMENT_VALUES or emotion not in EMOTION_VALUES:
+            logger.warning("Experience LLM response had invalid labels; using deterministic classification")
+            return None
+
+        evidence = []
+        for prefix, label in (("sentiment", sentiment), ("emotion", emotion)):
+            line_index = data.get(f"{prefix}_evidence_line")
+            quote = data.get(f"{prefix}_quote")
+            if type(line_index) is not int or not isinstance(quote, str) or not quote:
+                continue
+            matching_turn = next(
+                (turn for turn in customer_turns if turn.turn_index == line_index),
+                None,
+            )
+            if matching_turn is None or quote.casefold() not in matching_turn.raw_text.casefold():
+                continue
+            evidence.append(EvidenceItem(
+                source_type="transcript_turn",
+                reference_id=matching_turn.turn_id,
+                line_index=line_index,
+                text_snippet=quote,
+                timestamp_s=matching_turn.start_s,
+                reason=data.get(f"{prefix}_reason")
+                or f"LLM identified {label.lower()} customer {prefix}",
+            ))
+
+        return sentiment, emotion, evidence
 
     def _evaluate_sentiment(self, customer_turns: List[TranscriptTurn]):
         if not customer_turns:

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from app.domain.envelope import InteractionEnvelope
 from app.domain.transcript import TranscriptTurn
@@ -39,6 +41,78 @@ def test_cooperative_sentiment_and_emotion():
     assert res.label == "Positive"
     assert res.details["sentiment"] == "Positive"
     assert res.details["emotion"] == "Cooperative"
+
+
+def test_configured_llm_classifies_sentiment_and_emotion():
+    class FakeLLM:
+        is_live_configured = True
+
+        def __init__(self):
+            self.calls = []
+
+        def chat_completion(self, messages):
+            self.calls.append(messages)
+            return json.dumps(
+                {
+                    "sentiment": "Negative",
+                    "emotion": "Frustrated",
+                    "sentiment_evidence_line": 2,
+                    "sentiment_quote": "I am really upset.",
+                    "sentiment_reason": "Customer states they are upset.",
+                    "emotion_evidence_line": 2,
+                    "emotion_quote": "I am really upset.",
+                    "emotion_reason": "Customer expresses frustration.",
+                }
+            )
+
+    client = FakeLLM()
+    evaluator = CustomerExperienceEvaluator(llm_client=client)
+    turns = [
+        TranscriptTurn(
+            "t2",
+            "c2_llm",
+            "ten1",
+            2,
+            "customer",
+            "I am really upset.",
+            "i am really upset.",
+        )
+    ]
+
+    result = evaluator.evaluate(_envelope("c2_llm"), turns)
+
+    assert len(client.calls) == 1
+    assert result.method == "llm"
+    assert result.details["sentiment"] == "Negative"
+    assert result.details["emotion"] == "Frustrated"
+    assert len(result.evidence) == 2
+    assert {e.line_index for e in result.evidence} == {2}
+
+
+def test_configured_llm_failure_uses_deterministic_provenance():
+    class UnavailableLLM:
+        is_live_configured = True
+
+        def chat_completion(self, messages):
+            return None
+
+    evaluator = CustomerExperienceEvaluator(llm_client=UnavailableLLM())
+    turns = [
+        TranscriptTurn(
+            "t2",
+            "c2_fallback",
+            "ten1",
+            2,
+            "customer",
+            "I am interested.",
+            "i am interested.",
+        )
+    ]
+
+    result = evaluator.evaluate(_envelope("c2_fallback"), turns)
+
+    assert result.method == "deterministic"
+    assert result.details["sentiment"] == "Positive"
 
 def test_quality_and_facts_evaluation():
     quality_eval = QualityEvaluator()

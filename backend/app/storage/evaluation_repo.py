@@ -2,7 +2,9 @@ import json
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.domain.evaluation import EvaluationResult, EvidenceItem
 from app.storage.orm import EvaluationResultRow
@@ -20,37 +22,56 @@ class EvaluationRepository:
     ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
+            dialect = session.get_bind().dialect.name
+            if dialect == "sqlite":
+                insert = sqlite_insert
+            elif dialect == "postgresql":
+                insert = postgresql_insert
+            else:
+                raise NotImplementedError(
+                    f"Atomic evaluation upsert is not supported for database dialect {dialect!r}"
+                )
+
             for r in results:
-                # Remove existing row for this evaluator and version
-                session.execute(
-                    delete(EvaluationResultRow).where(
-                        EvaluationResultRow.tenant_id == tenant_id,
-                        EvaluationResultRow.interaction_id == interaction_id,
-                        EvaluationResultRow.evaluator_id == r.evaluator_id,
-                        EvaluationResultRow.evaluator_version == r.evaluator_version,
-                    )
-                )
-
                 evidence_dicts = [asdict(e) for e in r.evidence]
-
-                row = EvaluationResultRow(
-                    tenant_id=tenant_id,
-                    interaction_id=interaction_id,
-                    evaluator_id=r.evaluator_id,
-                    evaluator_version=r.evaluator_version,
-                    family=r.family,
-                    method=r.method,
-                    label=r.label,
-                    score=r.score,
-                    confidence=r.confidence,
-                    severity=r.severity,
-                    review_status=r.review_status,
-                    evidence_json=json.dumps(evidence_dicts),
-                    reason=r.reason,
-                    details_json=json.dumps(r.details),
-                    created_at=now,
+                values = {
+                    "tenant_id": tenant_id,
+                    "interaction_id": interaction_id,
+                    "evaluator_id": r.evaluator_id,
+                    "evaluator_version": r.evaluator_version,
+                    "family": r.family,
+                    "method": r.method,
+                    "label": r.label,
+                    "score": r.score,
+                    "confidence": r.confidence,
+                    "severity": r.severity,
+                    "review_status": r.review_status,
+                    "evidence_json": json.dumps(evidence_dicts),
+                    "reason": r.reason,
+                    "details_json": json.dumps(r.details),
+                    "created_at": now,
+                }
+                statement = insert(EvaluationResultRow).values(**values)
+                statement = statement.on_conflict_do_update(
+                    index_elements=[
+                        EvaluationResultRow.tenant_id,
+                        EvaluationResultRow.interaction_id,
+                        EvaluationResultRow.evaluator_id,
+                        EvaluationResultRow.evaluator_version,
+                    ],
+                    set_={
+                        key: getattr(statement.excluded, key)
+                        for key in values
+                        if key
+                        not in {
+                            "tenant_id",
+                            "interaction_id",
+                            "evaluator_id",
+                            "evaluator_version",
+                        }
+                    },
                 )
-                session.add(row)
+                session.execute(statement)
             session.commit()
 
     def save_many(self, results: list[EvaluationResult]) -> None:

@@ -124,7 +124,6 @@ class InteractionTimelineRow(Base):
     timeline_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
-
 class ObservabilityMetricsRow(Base):
     __tablename__ = "observability_metrics"
     __table_args__ = (
@@ -222,4 +221,3 @@ class GoldenCallLabelRow(Base):
     never_rule_broken: Mapped[str] = mapped_column(String(128), default="None")
     reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-

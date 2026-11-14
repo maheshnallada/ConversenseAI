@@ -75,6 +75,14 @@ class FactsExtractionEvaluator(BaseEvaluator):
     def _extract_policy(self, customer_turns: List[TranscriptTurn]):
         for ct in customer_turns:
             text = (ct.normalized_text or ct.raw_text).lower()
+            if "no policy" in text or "don't have" in text or "none" in text:
+                return "None", [EvidenceItem(
+                    source_type="transcript_turn",
+                    reference_id=ct.turn_id,
+                    line_index=ct.turn_index,
+                    text_snippet=ct.raw_text,
+                    reason="Customer stated no active policy"
+                )]
             if "company" in text or "corporate" in text or "employer" in text:
                 return "Company policy", [EvidenceItem(
                     source_type="transcript_turn",
@@ -91,14 +99,6 @@ class FactsExtractionEvaluator(BaseEvaluator):
                     text_snippet=ct.raw_text,
                     reason="Customer mentioned individual/own cover"
                 )]
-            if "no policy" in text or "don't have" in text or "none" in text:
-                return "None", [EvidenceItem(
-                    source_type="transcript_turn",
-                    reference_id=ct.turn_id,
-                    line_index=ct.turn_index,
-                    text_snippet=ct.raw_text,
-                    reason="Customer stated no active policy"
-                )]
         return None, []
 
     def _extract_who_needs_cover(self, customer_turns: List[TranscriptTurn]):
@@ -111,7 +111,15 @@ class FactsExtractionEvaluator(BaseEvaluator):
                 mentions.append("Spouse")
             if "kid" in text or "child" in text or "son" in text or "daughter" in text:
                 mentions.append("Children")
-            if "self" in text or "myself" in text or "me" in text:
+            self_reference_patterns = (
+                r"\bself\b",
+                r"\bmyself\b",
+                r"\bfor me\b",
+                r"\bme personally\b",
+                r"\bmy (?:own )?(?:health )?(?:insurance|policy|cover)\b",
+                r"\bi (?:need|want|am looking for|would like)\b.{0,40}\b(?:health )?(?:insurance|policy|cover)\b",
+            )
+            if any(re.search(pattern, text) for pattern in self_reference_patterns):
                 mentions.append("Self")
             if "family" in text:
                 mentions.append("Family")
@@ -153,7 +161,7 @@ class FactsExtractionEvaluator(BaseEvaluator):
             for pat in time_patterns:
                 m = re.search(pat, text)
                 if m:
-                    return ct.raw_text.strip(), [EvidenceItem(
+                    return m.group(0).strip(), [EvidenceItem(
                         source_type="transcript_turn",
                         reference_id=ct.turn_id,
                         line_index=ct.turn_index,

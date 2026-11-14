@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -18,13 +19,13 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default=str(Path(__file__).resolve().parent.parent / "data" / "calls"),
+        default=None,
         help="Path to calls directory",
     )
     parser.add_argument(
         "--tenant-id",
         type=str,
-        default="health_campaign",
+        default=os.getenv("TENANT_ID", "health_campaign"),
         help="Tenant ID for metrics",
     )
     parser.add_argument(
@@ -50,7 +51,12 @@ def main():
     service = ObservabilityService(session_factory=factory, rate_card=rate_card)
     repo = ObservabilityRepository(factory)
 
-    calls_dir = Path(args.data_dir).resolve()
+    artifact_root = Path(os.getenv("ARTIFACT_STORAGE_PATH") or backend_path / "storage" / "artifacts")
+    calls_dir = (
+        Path(args.data_dir).resolve()
+        if args.data_dir
+        else (artifact_root / args.tenant_id).resolve()
+    )
     call_folders = sorted(
         [d for d in calls_dir.iterdir() if d.is_dir() and d.name.startswith("call_")],
         key=lambda d: d.name,
@@ -79,7 +85,10 @@ def main():
     print(f"    - Input Tokens: {summary.total_input_tokens}")
     print(f"    - Output Tokens: {summary.total_output_tokens}")
     print(f"    - Total Tokens: {summary.total_input_tokens + summary.total_output_tokens}")
-    print(f"  Total Estimated Cost: ${summary.total_cost:.4f} {summary.currency}")
+    if summary.total_cost is None:
+        print(f"  Total Estimated Cost: unavailable ({summary.currency})")
+    else:
+        print(f"  Total Estimated Cost: ${summary.total_cost:.4f} {summary.currency}")
     print("All metrics successfully stored in table 'observability_metrics'.")
 
 

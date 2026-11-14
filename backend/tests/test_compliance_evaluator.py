@@ -1,15 +1,18 @@
+from datetime import datetime
+
 import pytest
 from app.domain.envelope import InteractionEnvelope
 from app.domain.transcript import TranscriptTurn
 from app.evaluation.compliance import ComplianceEvaluator
 
 
-def _envelope(interaction_id="c1", domain_data=None):
+def _envelope(interaction_id="c1", domain_data=None, started_at=None):
     return InteractionEnvelope(
         tenant_id="ten1",
         interaction_id=interaction_id,
         schema_version="1.0",
         use_case="health_insurance",
+        started_at=started_at,
         domain_data=domain_data or {},
     )
 
@@ -80,4 +83,60 @@ def test_compliant_call_passes():
     assert result.label == "PASSED"
     assert result.review_status == "PASSED"
     assert len(result.evidence) == 0
+
+
+@pytest.mark.parametrize(
+    "domain_data",
+    [
+        {"meta": None},
+        {"meta": []},
+        {"meta": {"end_call": None}},
+        {"meta": {"end_call": []}},
+        {"meta": {"end_call": {"record": None}}},
+        {"meta": {"end_call": {"record": []}}},
+    ],
+)
+def test_malformed_nested_appointment_metadata_returns_valid_result(domain_data):
+    result = ComplianceEvaluator().evaluate(_envelope(domain_data=domain_data), [])
+
+    assert result.label == "PASSED"
+    assert result.evidence == []
+
+
+def test_same_day_booking_fails_with_metadata_evidence():
+    env = _envelope(
+        domain_data={"meta": {"end_call": {"record": {"date": "2026-11-14", "time": "11:00"}}}},
+        started_at=datetime.fromisoformat("2026-11-14T01:00:00+05:30"),
+    )
+
+    result = ComplianceEvaluator().evaluate(env, [])
+
+    assert result.label == "FAILED"
+    assert any("same-day" in evidence.reason.lower() for evidence in result.evidence)
+
+
+def test_different_day_booking_is_not_a_same_day_violation():
+    env = _envelope(
+        domain_data={"meta": {"end_call": {"record": {"date": "2026-11-15", "time": "11:00"}}}},
+        started_at=datetime.fromisoformat("2026-11-14T01:00:00+05:30"),
+    )
+
+    result = ComplianceEvaluator().evaluate(env, [])
+
+    assert result.label == "PASSED"
+    assert result.evidence == []
+
+
+@pytest.mark.parametrize(
+    "insurer",
+    ["care health", "star health", "hdfc ergo", "niva bupa", "max bupa"],
+)
+def test_disallowed_insurer_mentions_are_failed_with_evidence(insurer):
+    text = f"We offer a policy from {insurer}."
+    turn = TranscriptTurn("agent_1", "c1", "ten1", 0, "agent", text, text.lower())
+
+    result = ComplianceEvaluator().evaluate(_envelope(), [turn])
+
+    assert result.label == "FAILED"
+    assert any(insurer in evidence.reason.lower() for evidence in result.evidence)
 

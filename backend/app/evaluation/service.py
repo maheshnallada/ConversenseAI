@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
@@ -14,10 +15,10 @@ from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.transcript_repo import TranscriptRepository
 from app.storage.timeline_repo import TimelineRepository
 from app.storage.observability_repo import ObservabilityRepository
-from app.storage.orm import InteractionRow, ArtifactRow
+from app.storage.orm import InteractionRow, ArtifactRow, OutboxRow
 from app.storage.artifacts import LocalArtifactStore
 from app.ingestion.mapper import map_call_folder
-from app.ingestion.service import canonical_json, payload_hash
+from app.ingestion.service import ACCEPTED_EVENT, canonical_json, payload_hash
 from app.reconstruction.processor import TranscriptProcessor
 from app.reconstruction.reconstructor import TimelineReconstructor
 from app.observability.service import ObservabilityService
@@ -42,7 +43,8 @@ class EvaluationService:
         self.obs_repo = ObservabilityRepository(session_factory)
 
         root = Path(__file__).resolve().parent.parent.parent.parent
-        self.artifact_store = artifact_store or LocalArtifactStore(root / "data" / "artifact_store")
+        artifact_root = os.getenv("ARTIFACT_STORAGE_PATH") or root / "data" / "artifact_store"
+        self.artifact_store = artifact_store or LocalArtifactStore(artifact_root)
         self.rate_card_manager = rate_card_manager or RateCardManager(root / "configs" / "rate_cards.json")
         self.obs_service = ObservabilityService(session_factory, self.rate_card_manager)
         self.processor = TranscriptProcessor()
@@ -64,15 +66,16 @@ class EvaluationService:
                 return direct.interaction_id
 
         if identifier.startswith("call_"):
-            root = Path(__file__).resolve().parent.parent.parent.parent
-            call_json = root / "data" / "calls" / identifier / "call.json"
-            if call_json.exists():
-                try:
+            artifact_root = self.artifact_store.base_dir.resolve()
+            tenant_root = (artifact_root / tenant_id).resolve()
+            call_json = (tenant_root / identifier / "call.json").resolve()
+            if tenant_root.is_relative_to(artifact_root) and call_json.is_relative_to(tenant_root):
+                if call_json.exists():
                     with open(call_json, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                        return data.get("call_id", identifier)
-                except Exception:
-                    pass
+                    call_id = data.get("call_id") if isinstance(data, dict) else None
+                    if isinstance(call_id, str) and call_id:
+                        return call_id
 
         return identifier
 
@@ -155,6 +158,25 @@ class EvaluationService:
                     created_at=envelope.started_at or datetime.now(timezone.utc),
                 )
                 session.add(row)
+
+            existing_outbox_event = session.scalar(
+                select(OutboxRow).where(
+                    OutboxRow.tenant_id == envelope.tenant_id,
+                    OutboxRow.interaction_id == envelope.interaction_id,
+                    OutboxRow.event_type == ACCEPTED_EVENT,
+                )
+            )
+            if not existing_outbox_event:
+                session.add(
+                    OutboxRow(
+                        tenant_id=envelope.tenant_id,
+                        interaction_id=envelope.interaction_id,
+                        event_type=ACCEPTED_EVENT,
+                        payload_json=canonical,
+                        created_at=datetime.now(timezone.utc),
+                        published_at=None,
+                    )
+                )
 
             # Store artifact metadata rows
             for art_row in artifact_rows:

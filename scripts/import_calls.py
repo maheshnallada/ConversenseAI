@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -24,7 +25,7 @@ def main():
     parser.add_argument(
         "--tenant-id",
         type=str,
-        default="health_campaign",
+        default=os.getenv("TENANT_ID", "health_campaign"),
         help="Tenant ID for ingested calls",
     )
     parser.add_argument(
@@ -36,7 +37,8 @@ def main():
     parser.add_argument(
         "--artifacts-dir",
         type=str,
-        default=str(backend_path / "storage" / "artifacts"),
+        default=os.getenv("ARTIFACT_STORAGE_PATH")
+        or str(backend_path / "storage" / "artifacts"),
         help="Directory to store ingested artifacts",
     )
     parser.add_argument(

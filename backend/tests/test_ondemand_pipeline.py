@@ -2,6 +2,7 @@ from pathlib import Path
 import pytest
 from app.storage.db import create_session_factory, init_db
 from app.evaluation.service import EvaluationService
+from app.ingestion.service import IngestionService
 from app.storage.evaluation_repo import EvaluationRepository
 
 @pytest.fixture
@@ -49,3 +50,12 @@ def test_on_demand_pipeline_new_call_folder(db_session_factory):
     assert report["metrics_calculated"] is True
     assert report["evaluations_count"] >= 5
     assert "evaluations" in report
+
+    ingestion_service = IngestionService(db_session_factory)
+    assert ingestion_service.outbox_count("health_campaign", report["interaction_id"]) == 1
+
+    eval_service.process_and_evaluate_folder(
+        call_folder_path=call_folder,
+        tenant_id="health_campaign",
+    )
+    assert ingestion_service.outbox_count("health_campaign", report["interaction_id"]) == 1
