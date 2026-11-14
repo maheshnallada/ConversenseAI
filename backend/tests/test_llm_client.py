@@ -1,9 +1,17 @@
+import asyncio
 from types import SimpleNamespace
 
-from pydantic import BaseModel
+import pytest
+from openai import APITimeoutError, RateLimitError
+from pydantic import BaseModel, ValidationError
 
 import app.evaluation.llm_client as llm_client_module
-from app.evaluation.llm_client import LLMClient
+from app.evaluation.errors import (
+    LLMConfigurationError,
+    LLMRequestError,
+    LLMResponseError,
+)
+from app.evaluation.llm_client import LLMClient, complete_structured
 
 
 def _mock_sdk_client(monkeypatch, *, parsed=None, content="ok", error=None):
@@ -122,3 +130,150 @@ def test_sdk_error_logs_response_detail_without_echoing_api_key(monkeypatch, cap
     assert result is None
     assert "route denied" in caplog.text
     assert api_key not in caplog.text
+
+
+def _mock_async_sdk_client(monkeypatch, *, parsed=None, choices=None, error=None):
+    captured = {}
+
+    class AsyncCompletions:
+        async def parse(self, **kwargs):
+            captured["operation"] = "parse"
+            captured["request"] = kwargs
+            if error:
+                raise error
+            return SimpleNamespace(
+                choices=choices
+                if choices is not None
+                else [
+                    SimpleNamespace(
+                        message=SimpleNamespace(parsed=parsed, refusal=None)
+                    )
+                ]
+            )
+
+    class AsyncSDKClient:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+            self.beta = SimpleNamespace(
+                chat=SimpleNamespace(
+                    completions=AsyncCompletions(),
+                )
+            )
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(llm_client_module, "AsyncOpenAI", AsyncSDKClient)
+    return captured
+
+
+class StructuredResponse(BaseModel):
+    answer: str
+
+
+def _configure_llm(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "gateway-secret")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.portkey.ai/v1")
+    monkeypatch.setenv("LLM_MODEL", "openai/gpt-oss-120b")
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+
+
+def test_async_structured_call_requires_api_key(monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setenv("LLM_PROVIDER", "test-provider")
+
+    with pytest.raises(LLMConfigurationError) as error:
+        asyncio.run(complete_structured([], StructuredResponse))
+
+    assert error.value.model == "test-model"
+    assert error.value.provider == "test-provider"
+    assert "test-model" in str(error.value)
+
+
+def test_async_structured_call_uses_async_sdk_parse(monkeypatch):
+    _configure_llm(monkeypatch)
+    expected = StructuredResponse(answer="ok")
+    captured = _mock_async_sdk_client(monkeypatch, parsed=expected)
+
+    result = asyncio.run(
+        complete_structured(
+            [{"role": "user", "content": "hello"}],
+            StructuredResponse,
+        )
+    )
+
+    assert result == expected
+    assert captured["operation"] == "parse"
+    assert captured["client"]["api_key"] == "gateway-secret"
+    assert captured["client"]["base_url"] == "https://api.portkey.ai/v1"
+    assert captured["client"]["default_headers"]["x-portkey-provider"] == "@groq"
+    assert captured["request"]["response_format"] is StructuredResponse
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        APITimeoutError(request=SimpleNamespace()),
+        RateLimitError(
+            "rate limit for gateway-secret",
+            response=SimpleNamespace(
+                status_code=429,
+                request=SimpleNamespace(),
+                headers={},
+            ),
+            body={"message": "rate limit for gateway-secret"},
+        ),
+    ],
+)
+def test_async_provider_errors_are_typed_and_redacted(monkeypatch, provider_error):
+    _configure_llm(monkeypatch)
+    _mock_async_sdk_client(monkeypatch, error=provider_error)
+
+    with pytest.raises(LLMRequestError) as error:
+        asyncio.run(complete_structured([], StructuredResponse))
+
+    assert error.value.model == "openai/gpt-oss-120b"
+    assert error.value.provider == "groq"
+    assert "gateway-secret" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        SimpleNamespace(choices=[]),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        parsed={"unexpected": "shape"},
+                        refusal=None,
+                    )
+                )
+            ]
+        ),
+    ],
+)
+def test_async_empty_or_malformed_response_is_typed(monkeypatch, response):
+    _configure_llm(monkeypatch)
+    captured = _mock_async_sdk_client(monkeypatch, choices=response.choices)
+
+    with pytest.raises(LLMResponseError) as error:
+        asyncio.run(complete_structured([], StructuredResponse))
+
+    assert error.value.model == "openai/gpt-oss-120b"
+    assert error.value.provider == "groq"
+    assert captured["operation"] == "parse"
+
+
+def test_async_sdk_schema_parse_error_is_typed(monkeypatch):
+    _configure_llm(monkeypatch)
+    with pytest.raises(ValidationError) as validation_error:
+        StructuredResponse.model_validate({"unexpected": "shape"})
+    _mock_async_sdk_client(monkeypatch, error=validation_error.value)
+
+    with pytest.raises(LLMResponseError):
+        asyncio.run(complete_structured([], StructuredResponse))
