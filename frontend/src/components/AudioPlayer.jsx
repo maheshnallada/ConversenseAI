@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX, RotateCcw, FastForward, Headphones } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, RotateCcw, Headphones, AlertCircle } from 'lucide-react';
 
 export default function AudioPlayer({ audioUrl, currentTime, onTimeUpdate, onSeekTo }) {
   const audioRef = useRef(null);
@@ -20,7 +20,7 @@ export default function AudioPlayer({ audioUrl, currentTime, onTimeUpdate, onSee
     }
   }, [audioUrl]);
 
-  // When parent triggers seek (e.g. turn clicked)
+  // When parent triggers seek
   useEffect(() => {
     if (onSeekTo !== undefined && onSeekTo !== null && audioRef.current) {
       audioRef.current.currentTime = onSeekTo;
@@ -96,7 +96,7 @@ export default function AudioPlayer({ audioUrl, currentTime, onTimeUpdate, onSee
   };
 
   return (
-    <div className="glass-panel p-4 rounded-xl border border-slate-800 bg-slate-900/60 backdrop-blur-md">
+    <div className="p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 shadow-sm dark:shadow-none backdrop-blur-md transition-colors">
       <audio
         ref={audioRef}
         src={audioUrl}
@@ -107,21 +107,22 @@ export default function AudioPlayer({ audioUrl, currentTime, onTimeUpdate, onSee
         preload="metadata"
       />
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2.5">
         {/* Top Controls Row */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Controls Group */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <button
               onClick={togglePlay}
               disabled={audioError}
-              className={`w-10 h-10 rounded-lg flex items-center justify-center font-medium transition-all ${
+              className={`w-9 h-9 rounded-xl flex items-center justify-center font-semibold transition-all shadow-sm ${
                 isPlaying
-                  ? 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-100'
+                  ? 'bg-cyan-500 text-slate-950 shadow-cyan-500/25 ring-2 ring-cyan-400'
+                  : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700'
               }`}
               title={isPlaying ? 'Pause' : 'Play'}
             >
-              {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+              {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
             </button>
 
             <button
@@ -130,15 +131,15 @@ export default function AudioPlayer({ audioUrl, currentTime, onTimeUpdate, onSee
                   audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 5);
                 }
               }}
-              className="p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 text-slate-300 hover:text-white transition-colors"
+              className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700/60 transition-colors"
               title="Rewind 5s"
             >
-              <RotateCcw className="w-4 h-4" />
+              <RotateCcw className="w-3.5 h-3.5" />
             </button>
 
             <button
               onClick={cycleSpeed}
-              className="px-2.5 py-1 rounded-lg bg-slate-800/70 hover:bg-slate-800 text-xs font-mono text-cyan-400 font-semibold transition-colors"
+              className="px-2 py-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-[11px] font-sans font-bold text-cyan-700 dark:text-cyan-400 border border-slate-200 dark:border-slate-700/60 transition-colors"
               title="Change Speed"
             >
               {playbackRate}x
@@ -146,29 +147,29 @@ export default function AudioPlayer({ audioUrl, currentTime, onTimeUpdate, onSee
 
             <button
               onClick={toggleMute}
-              className="p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 text-slate-300 hover:text-white transition-colors"
+              className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700/60 transition-colors"
               title={isMuted ? 'Unmute' : 'Mute'}
             >
-              {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4" />}
+              {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-500" /> : <Volume2 className="w-3.5 h-3.5" />}
             </button>
           </div>
 
           {/* Time display & Channel Indicator */}
-          <div className="flex items-center gap-4 text-xs">
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-800/50 border border-slate-700/50 text-slate-400 font-mono">
-              <Headphones className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Ch 1 (Agent) &bull; Ch 2 (Customer)</span>
+          <div className="flex items-center gap-2 sm:gap-3 text-xs">
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-slate-500 dark:text-slate-400 font-sans text-[11px]">
+              <Headphones className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+              <span>Ch 1: Agent &bull; Ch 2: Customer</span>
             </div>
 
-            <div className="font-mono text-slate-300 bg-slate-950/60 px-2.5 py-1 rounded-md border border-slate-800">
-              <span className="text-cyan-400">{formatTime(pos)}</span>
-              <span className="text-slate-500 mx-1">/</span>
+            <div className="font-mono text-xs text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 font-medium">
+              <span className="text-cyan-700 dark:text-cyan-400 font-bold">{formatTime(pos)}</span>
+              <span className="text-slate-400 mx-1">/</span>
               <span>{formatTime(duration)}</span>
             </div>
           </div>
         </div>
 
-        {/* Seek Bar */}
+        {/* Seek Scrubber */}
         <div className="flex items-center gap-2">
           <input
             type="range"
@@ -177,18 +178,20 @@ export default function AudioPlayer({ audioUrl, currentTime, onTimeUpdate, onSee
             step={0.1}
             value={pos}
             onChange={handleSliderChange}
-            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 hover:accent-cyan-300 focus:outline-none"
+            className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500 hover:accent-cyan-400 focus:outline-none"
           />
         </div>
 
         {audioError && (
-          <div className="text-xs text-rose-400 bg-rose-950/30 border border-rose-800/40 rounded px-2.5 py-1.5 flex items-center justify-between">
-            <span>Audio stream unavailable or audio file missing for this interaction.</span>
-            <span className="font-mono text-[10px] text-slate-400">Endpoint: /audio</span>
+          <div className="text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/40 rounded-xl px-3 py-1.5 flex items-center justify-between font-sans">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>Audio recording unavailable for this interaction.</span>
+            </div>
+            <span className="font-mono text-[10px] text-slate-500">/audio</span>
           </div>
         )}
       </div>
     </div>
   );
 }
-

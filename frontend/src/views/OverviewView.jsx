@@ -74,16 +74,18 @@ export default function OverviewView() {
           icon={ShieldAlert}
         />
         <KpiCard
-          title="Latency (Avg / p95)"
-          value={`${overview?.avg_latency_s || 0}s / ${overview?.p95_latency_s || 0}s`}
-          hint={`Turn response latency`}
+          title="Turn Latency"
+          value={`${overview?.avg_latency_s || 0}s`}
+          badge={`p95: ${overview?.p95_latency_s || 0}s`}
+          hint="Avg turnaround time"
           variant="cyan"
           icon={Clock}
         />
         <KpiCard
-          title="Total Cost (USD)"
+          title="Total Cost"
           value={`$${overview?.total_cost_usd?.toFixed(4) || '0.0000'}`}
-          hint={`Avg $${overview?.avg_cost_per_interaction_usd?.toFixed(4) || 0} / call`}
+          badge="USD"
+          hint={`Avg $${overview?.avg_cost_per_interaction_usd?.toFixed(4) || 0}/call`}
           variant="amber"
           icon={DollarSign}
         />

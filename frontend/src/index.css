@@ -3,39 +3,36 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    color-scheme: light dark;
+  }
   body {
-    @apply bg-[#090d16] text-slate-100;
+    @apply bg-slate-50 text-slate-900 dark:bg-[#060a12] dark:text-slate-100 transition-colors duration-150 antialiased font-sans;
   }
 }
 
-/* Custom Scrollbar */
+/* Custom Scrollbar - Light & Dark */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  @apply bg-slate-100 dark:bg-slate-900;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
+  @apply bg-slate-300 dark:bg-slate-700 rounded;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  @apply bg-slate-400 dark:bg-slate-600;
 }
 
-/* Glassmorphism helpers */
+/* Glassmorphism helpers for Light & Dark */
 .glass-panel {
-  background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(51, 65, 85, 0.5);
+  @apply bg-white/90 dark:bg-slate-900/75 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-none;
 }
 
 .glass-card {
-  background: rgba(30, 41, 59, 0.6);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(51, 65, 85, 0.6);
+  @apply bg-white/70 dark:bg-slate-900/50 backdrop-blur-sm border border-slate-200 dark:border-slate-800 shadow-sm dark:shadow-none;
 }
 
 .glow-cyan {
@@ -45,4 +42,3 @@
 .glow-emerald {
   box-shadow: 0 0 20px -5px rgba(52, 211, 153, 0.25);
 }
-
