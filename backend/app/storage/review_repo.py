@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from sqlalchemy import desc, select
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.storage.orm import HumanReviewRow, EvaluationResultRow
+from app.storage.orm import (
+    EvaluationBatchRow,
+    EvaluationRunRow,
+    HumanReviewRow,
+)
 
 
 class HumanReviewRepository:
@@ -14,37 +18,59 @@ class HumanReviewRepository:
         self,
         tenant_id: str,
         interaction_id: str,
-        evaluator_id: str,
+        evaluation_id: str,
         reviewed_label: str,
         reviewer_name: str,
         review_decision: str = "OVERRIDDEN",
         original_label: Optional[str] = None,
         notes: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if review_decision not in {"ACCEPTED", "OVERRIDDEN"}:
+            raise ValueError(f"Unsupported review decision: {review_decision!r}.")
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            # 1. Update the evaluation_results row if it exists
-            eval_row = session.scalar(
-                select(EvaluationResultRow).where(
-                    EvaluationResultRow.tenant_id == tenant_id,
-                    EvaluationResultRow.interaction_id == interaction_id,
-                    EvaluationResultRow.evaluator_id == evaluator_id,
-                ).order_by(
-                    desc(EvaluationResultRow.created_at),
-                    desc(EvaluationResultRow.id),
-                ).limit(1)
+            batch = session.scalar(
+                select(EvaluationBatchRow).where(
+                    EvaluationBatchRow.tenant_id == tenant_id,
+                    EvaluationBatchRow.interaction_id == interaction_id,
+                    EvaluationBatchRow.evaluation_id == evaluation_id,
+                )
             )
-            if eval_row:
-                if not original_label:
-                    original_label = eval_row.label
-                eval_row.label = reviewed_label
-                eval_row.review_status = "PASSED" if review_decision == "ACCEPTED" else "OVERRIDDEN"
+            if batch is None:
+                raise ValueError(
+                    f"Evaluation {evaluation_id!r} was not found for "
+                    f"{tenant_id}:{interaction_id}."
+                )
+            batch.review_status = (
+                "PASSED" if review_decision == "ACCEPTED" else "OVERRIDDEN"
+            )
+            batch.review_required = False
+            batch.review_reasons_json = "[]"
 
-            # 2. Add an audit entry to human_reviews
+            run = session.scalar(
+                select(EvaluationRunRow).where(
+                    EvaluationRunRow.tenant_id == tenant_id,
+                    EvaluationRunRow.interaction_id == interaction_id,
+                    EvaluationRunRow.run_id == batch.run_id,
+                )
+            )
+            if run is not None:
+                other_batches = session.scalars(
+                    select(EvaluationBatchRow).where(
+                        EvaluationBatchRow.tenant_id == tenant_id,
+                        EvaluationBatchRow.interaction_id == interaction_id,
+                        EvaluationBatchRow.run_id == batch.run_id,
+                    )
+                ).all()
+                run.review_required = any(
+                    item.review_required for item in other_batches
+                )
+
             review_row = HumanReviewRow(
                 tenant_id=tenant_id,
                 interaction_id=interaction_id,
-                evaluator_id=evaluator_id,
+                evaluator_id=evaluation_id,
+                evaluation_id=evaluation_id,
                 original_label=original_label,
                 reviewed_label=reviewed_label,
                 review_decision=review_decision,
@@ -59,7 +85,7 @@ class HumanReviewRepository:
                 "id": review_row.id,
                 "tenant_id": tenant_id,
                 "interaction_id": interaction_id,
-                "evaluator_id": evaluator_id,
+                "evaluation_id": evaluation_id,
                 "original_label": original_label,
                 "reviewed_label": reviewed_label,
                 "review_decision": review_decision,
@@ -89,12 +115,14 @@ class HumanReviewRepository:
                     "tenant_id": r.tenant_id,
                     "interaction_id": r.interaction_id,
                     "evaluator_id": r.evaluator_id,
+                    "evaluation_id": r.evaluation_id,
                     "original_label": r.original_label,
                     "reviewed_label": r.reviewed_label,
                     "review_decision": r.review_decision,
                     "reviewer_name": r.reviewer_name,
                     "notes": r.notes,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "archived": r.evaluation_id is None,
                 }
                 for r in rows
             ]

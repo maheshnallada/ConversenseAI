@@ -35,6 +35,8 @@ class GoldenDatasetRepository:
                 "first_thing_wrong_what": label.first_thing_wrong_what,
                 "never_rule_broken": label.never_rule_broken or "None",
                 "reviewer_notes": label.reviewer_notes,
+                "conversation_status": label.conversation_status,
+                "language_slice": label.language_slice,
                 "created_at": now,
             }
             for label in labels
@@ -51,6 +53,8 @@ class GoldenDatasetRepository:
             "first_thing_wrong_what",
             "never_rule_broken",
             "reviewer_notes",
+            "conversation_status",
+            "language_slice",
         }
 
         with self.session_factory.begin() as session:
@@ -98,5 +102,7 @@ class GoldenDatasetRepository:
             first_thing_wrong_what=row.first_thing_wrong_what,
             never_rule_broken=row.never_rule_broken,
             reviewer_notes=row.reviewer_notes,
+            conversation_status=row.conversation_status,
+            language_slice=row.language_slice,
         )
 

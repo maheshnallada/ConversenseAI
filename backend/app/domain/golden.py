@@ -15,4 +15,6 @@ class GoldenCallLabel:
     never_rule_broken: str = "None"
     interaction_id: Optional[str] = None
     reviewer_notes: Optional[str] = None
+    conversation_status: Optional[str] = None
+    language_slice: Optional[str] = None
 

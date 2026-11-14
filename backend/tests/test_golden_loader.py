@@ -77,3 +77,32 @@ def test_reply_wait_checks_validation(tmp_path: Path):
         assert "gap_s" in c
         assert c["gap_s"] >= 0.0
 
+
+def test_golden_dataset_reads_optional_explicit_benchmark_labels(tmp_path: Path):
+    csv_path = tmp_path / "labels.csv"
+    csv_path.write_text(
+        "Call,What happened,Correct outcome,Conversation status,Language slice\n"
+        "call_01,Call reached an ending,Not interested,COMPLETED,hi-en\n"
+        "call_02,Can't tell,Can't tell,,\n",
+        encoding="utf-8",
+    )
+
+    labels = load_golden_dataset(csv_path)
+
+    assert labels[0].conversation_status == "COMPLETED"
+    assert labels[0].language_slice == "hi-en"
+    assert labels[1].conversation_status is None
+    assert labels[1].language_slice is None
+
+
+def test_golden_dataset_rejects_unknown_conversation_status(tmp_path: Path):
+    csv_path = tmp_path / "labels.csv"
+    csv_path.write_text(
+        "Call,What happened,Correct outcome,Conversation status\n"
+        "call_01,Call reached an ending,Not interested,DONEISH\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Conversation status"):
+        load_golden_dataset(csv_path)
+

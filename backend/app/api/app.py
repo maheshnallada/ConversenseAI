@@ -7,7 +7,7 @@ import uuid
 import zipfile
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from urllib.parse import unquote, urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -82,11 +82,15 @@ class ImportGoldenRequest(BaseModel):
     csv_path: Optional[str] = None
 
 
+class EvaluateInteractionRequest(BaseModel):
+    retry_from_run_id: Optional[str] = None
+
+
 class HumanReviewSubmission(BaseModel):
-    evaluator_id: str
+    evaluation_id: str
     reviewed_label: str
     reviewer_name: str
-    review_decision: Optional[str] = "OVERRIDDEN"  # ACCEPTED or OVERRIDDEN
+    review_decision: Literal["ACCEPTED", "OVERRIDDEN"] = "OVERRIDDEN"
     original_label: Optional[str] = None
     notes: Optional[str] = None
 
@@ -289,31 +293,18 @@ def create_app(session_factory) -> FastAPI:
     def evaluate_interaction(
         interaction_id: str,
         tenant_id: Annotated[str, Depends(require_tenant_id)],
+        body: EvaluateInteractionRequest | None = None,
     ):
         try:
-            results = get_eval_service().evaluate_interaction(tenant_id, interaction_id)
+            run = get_eval_service().evaluate_interaction(
+                tenant_id,
+                interaction_id,
+                retry_from_run_id=body.retry_from_run_id if body else None,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        return [
-            {
-                "tenant_id": r.tenant_id,
-                "interaction_id": r.interaction_id,
-                "evaluator_id": r.evaluator_id,
-                "evaluator_version": r.evaluator_version,
-                "family": r.family,
-                "method": r.method,
-                "label": r.label,
-                "score": r.score,
-                "confidence": r.confidence,
-                "severity": r.severity,
-                "review_status": r.review_status,
-                "evidence": [asdict(e) for e in r.evidence],
-                "reason": r.reason,
-                "details": r.details,
-            }
-            for r in results
-        ]
+        return asdict(run)
 
     @app.get("/api/v1/interactions/{interaction_id}/evaluations")
     def get_interaction_evaluations(
@@ -321,28 +312,14 @@ def create_app(session_factory) -> FastAPI:
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
         service = get_eval_service()
-        resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
-        results = get_eval_repo().get_by_interaction(tenant_id, resolved_id)
-
-        return [
-            {
-                "tenant_id": r.tenant_id,
-                "interaction_id": r.interaction_id,
-                "evaluator_id": r.evaluator_id,
-                "evaluator_version": r.evaluator_version,
-                "family": r.family,
-                "method": r.method,
-                "label": r.label,
-                "score": r.score,
-                "confidence": r.confidence,
-                "severity": r.severity,
-                "review_status": r.review_status,
-                "evidence": [asdict(e) for e in r.evidence],
-                "reason": r.reason,
-                "details": r.details,
-            }
-            for r in results
-        ]
+        try:
+            resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        run = get_eval_repo().get_latest_run(tenant_id, resolved_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="No evaluation run found.")
+        return asdict(run)
 
     # Human Review Endpoints
     @app.post("/api/v1/interactions/{interaction_id}/reviews")
@@ -352,18 +329,20 @@ def create_app(session_factory) -> FastAPI:
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
         service = get_eval_service()
-        resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
-
-        review = get_review_repo().submit_review(
-            tenant_id=tenant_id,
-            interaction_id=resolved_id,
-            evaluator_id=body.evaluator_id,
-            reviewed_label=body.reviewed_label,
-            reviewer_name=body.reviewer_name,
-            review_decision=body.review_decision or "OVERRIDDEN",
-            original_label=body.original_label,
-            notes=body.notes,
-        )
+        try:
+            resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
+            review = get_review_repo().submit_review(
+                tenant_id=tenant_id,
+                interaction_id=resolved_id,
+                evaluation_id=body.evaluation_id,
+                reviewed_label=body.reviewed_label,
+                reviewer_name=body.reviewer_name,
+                review_decision=body.review_decision,
+                original_label=body.original_label,
+                notes=body.notes,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return review
 
     @app.get("/api/v1/interactions/{interaction_id}/reviews")
@@ -625,11 +604,20 @@ def create_app(session_factory) -> FastAPI:
         if not golden_labels:
             raise HTTPException(status_code=404, detail="No golden dataset labels loaded.")
 
-        evaluations_by_call: Dict[str, list] = {}
+        evaluations_by_call = {}
         for g in golden_labels:
-            resolved_id = eval_service.resolve_interaction_id(tenant_id, g.call_id)
-            evals = eval_repo.get_by_interaction(tenant_id, resolved_id)
-            evaluations_by_call[g.call_id] = evals
+            try:
+                resolved_id = eval_service.resolve_interaction_id(
+                    tenant_id,
+                    g.interaction_id or g.call_id,
+                )
+            except ValueError:
+                evaluations_by_call[g.call_id] = None
+                continue
+            evaluations_by_call[g.call_id] = eval_repo.get_latest_run(
+                tenant_id,
+                resolved_id,
+            )
 
         engine = BenchmarkEngine()
         report = engine.evaluate_benchmark(golden_labels, evaluations_by_call)

@@ -1,8 +1,9 @@
 import csv
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, get_args
 
 from app.domain.golden import GoldenCallLabel
+from app.evaluation.schemas import ConversationStatus
 
 
 def load_golden_dataset(csv_path: Path | str) -> List[GoldenCallLabel]:
@@ -28,6 +29,24 @@ def load_golden_dataset(csv_path: Path | str) -> List[GoldenCallLabel]:
             first_line = int(line_str) if line_str.isdigit() else None
             first_what = row.get("First thing wrong: what", "").strip() or None
             never_rule = row.get("Never-rule broken", "None").strip() or "None"
+            conversation_status = (
+                row.get("conversation_status")
+                or row.get("Conversation status")
+                or ""
+            ).strip() or None
+            language_slice = (
+                row.get("language_slice")
+                or row.get("Language slice")
+                or ""
+            ).strip() or None
+            if (
+                conversation_status is not None
+                and conversation_status not in get_args(ConversationStatus)
+            ):
+                raise ValueError(
+                    f"Conversation status {conversation_status!r} is invalid "
+                    f"for call {call_id!r}."
+                )
 
             labels.append(
                 GoldenCallLabel(
@@ -41,6 +60,8 @@ def load_golden_dataset(csv_path: Path | str) -> List[GoldenCallLabel]:
                     first_thing_wrong_line=first_line,
                     first_thing_wrong_what=first_what,
                     never_rule_broken=never_rule,
+                    conversation_status=conversation_status,
+                    language_slice=language_slice,
                 )
             )
 

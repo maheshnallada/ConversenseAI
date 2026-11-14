@@ -5,8 +5,10 @@ import pytest
 from app.storage.db import create_session_factory, init_db
 from app.storage.orm import EvaluationResultRow, InteractionRow
 from app.analytics.service import AnalyticsService
+from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.domain.observability import InteractionMetrics, PercentilesResult
 from app.observability.config import CostBreakdown
+from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.observability_repo import ObservabilityRepository
 from sqlalchemy.pool import StaticPool
 
@@ -49,6 +51,76 @@ def _evaluation(tenant_id, interaction_id, family, version, label, created_at):
         reason="test result",
         details_json="{}",
         created_at=created_at,
+    )
+
+
+def _evaluation_run(
+    tenant_id,
+    interaction_id,
+    run_id,
+    started_at,
+    overall,
+    outcome,
+    compliance_status,
+):
+    batches = []
+    for batch_name, parsed_output in (
+        (
+            "conversation_understanding",
+            {
+                "outcome": {"label": outcome},
+                "sentiment": {"label": "Neutral"},
+                "emotion": {"label": "Cooperative"},
+            },
+        ),
+        (
+            "conversation_quality",
+            {
+                "conversation_quality": {},
+                "conversation_completeness": {"conversation_status": "COMPLETED"},
+            },
+        ),
+        (
+            "compliance_appointment",
+            {
+                "compliance": {
+                    "rule_results": {
+                        "NR001": {"status": compliance_status}
+                    }
+                }
+            },
+        ),
+    ):
+        batches.append(
+            EvaluationBatchRecord(
+                evaluation_id=f"{run_id}-{batch_name}",
+                batch_name=batch_name,
+                status="completed",
+                model="test-model",
+                prompt_version="1",
+                schema_version="1",
+                started_at=started_at,
+                completed_at=started_at,
+                input_tokens=None,
+                output_tokens=None,
+                raw_output=None,
+                parsed_output=parsed_output,
+                validation={},
+                review_required=False,
+                review_status="NOT_REQUIRED",
+                review_reasons=[],
+            )
+        )
+    return EvaluationRun(
+        run_id=run_id,
+        tenant_id=tenant_id,
+        interaction_id=interaction_id,
+        batches=batches,
+        summary={"overall_assessment": overall},
+        started_at=started_at,
+        completed_at=started_at,
+        review_required=False,
+        review_reasons=[],
     )
 
 
@@ -150,7 +222,7 @@ def test_overview_classifies_noncompleted_statuses_separately():
     assert overview["unknown_interactions"] == 2
 
 
-def test_analytics_uses_latest_evaluation_per_interaction_and_family():
+def test_analytics_uses_latest_versioned_run_not_archival_results():
     service, factory = _isolated_service()
     old = datetime(2026, 1, 1, tzinfo=timezone.utc)
     current = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -158,27 +230,49 @@ def test_analytics_uses_latest_evaluation_per_interaction_and_family():
         session.add(_interaction("tenant_latest", "call_latest", "completed"))
         session.add_all(
             [
-                _evaluation("tenant_latest", "call_latest", "quality", "1.0", "Good", old),
-                _evaluation("tenant_latest", "call_latest", "quality", "2.0", "Bad", current),
-                _evaluation("tenant_latest", "call_latest", "compliance", "1.0", "PASSED", old),
-                _evaluation("tenant_latest", "call_latest", "compliance", "2.0", "FAILED", current),
-                _evaluation("tenant_latest", "call_latest", "outcome", "1.0", "Expert call booked", old),
-                _evaluation("tenant_latest", "call_latest", "outcome", "2.0", "Not interested", current),
+                _evaluation("tenant_latest", "call_latest", "quality", "9.0", "Good", current),
+                _evaluation("tenant_latest", "call_latest", "compliance", "9.0", "PASSED", current),
+                _evaluation("tenant_latest", "call_latest", "outcome", "9.0", "Expert call booked", current),
             ]
         )
         session.commit()
+    repo = EvaluationRepository(factory)
+    repo.save_run(
+        _evaluation_run(
+            "tenant_latest",
+            "call_latest",
+            "run-old",
+            old,
+            "Good",
+            "Expert call booked",
+            "NOT_DETECTED",
+        )
+    )
+    repo.save_run(
+        _evaluation_run(
+            "tenant_latest",
+            "call_latest",
+            "run-current",
+            current,
+            "Bad",
+            "Not interested",
+            "DETECTED",
+        )
+    )
 
     overview = service.get_overview_analytics("tenant_latest")
     quality = service.get_quality_analytics("tenant_latest")
     page = service.get_interactions_page("tenant_latest")
 
     assert overview["quality_distribution"] == {"Bad": 1}
-    assert overview["compliance_findings"] == {"PASSED": 0, "FAILED": 1}
+    assert overview["compliance_findings"]["FAILED"] == 1
+    assert overview["compliance_findings"]["PASSED"] == 0
     assert overview["successful_outcomes"] == 0
     assert quality["outcomes"] == {"Not interested": 1}
     assert quality["overall_quality"] == {"Bad": 1}
     assert page["items"][0]["quality"] == "Bad"
     assert page["items"][0]["outcome"] == "Not interested"
+    assert page["items"][0]["evaluations_count"] == 3
 
 
 def test_cost_analytics_does_not_sum_mixed_currencies():

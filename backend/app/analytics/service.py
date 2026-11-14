@@ -1,37 +1,99 @@
 import json
-import logging
 from typing import Dict, Any, List, Optional
 from collections import Counter
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, desc
 from sqlalchemy.orm import sessionmaker
 
 from app.storage.orm import (
     InteractionRow,
     ObservabilityMetricsRow,
-    EvaluationResultRow,
+    EvaluationBatchRow,
+    EvaluationRunRow,
     InteractionTimelineRow,
 )
 from app.observability.calculator import calculate_percentiles
+from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.observability_repo import aggregate_cost_rows
-
-logger = logging.getLogger(__name__)
-
 
 class AnalyticsService:
     def __init__(self, session_factory: sessionmaker):
         self.session_factory = session_factory
 
     @staticmethod
-    def _latest_evaluations(session, tenant_id: str) -> list[EvaluationResultRow]:
+    def _latest_runs(session, tenant_id: str):
         rows = session.scalars(
-            select(EvaluationResultRow)
-            .where(EvaluationResultRow.tenant_id == tenant_id)
-            .order_by(desc(EvaluationResultRow.created_at), desc(EvaluationResultRow.id))
+            select(EvaluationRunRow)
+            .where(EvaluationRunRow.tenant_id == tenant_id)
+            .order_by(desc(EvaluationRunRow.started_at), desc(EvaluationRunRow.id))
         ).all()
-        selected: dict[tuple[str, str], EvaluationResultRow] = {}
+        selected: dict[str, EvaluationRunRow] = {}
         for row in rows:
-            selected.setdefault((row.interaction_id, row.family), row)
-        return list(selected.values())
+            selected.setdefault(row.interaction_id, row)
+        if not selected:
+            return {}
+
+        batches_by_run: dict[str, list[EvaluationBatchRow]] = {
+            run.run_id: [] for run in selected.values()
+        }
+        batch_rows = session.scalars(
+            select(EvaluationBatchRow).where(
+                EvaluationBatchRow.tenant_id == tenant_id,
+                EvaluationBatchRow.run_id.in_(batches_by_run),
+            )
+        ).all()
+        for batch in batch_rows:
+            batches_by_run[batch.run_id].append(batch)
+        return {
+            interaction_id: EvaluationRepository._to_run(
+                run,
+                batches_by_run[run.run_id],
+            )
+            for interaction_id, run in selected.items()
+        }
+
+    @staticmethod
+    def _batch_value(run, batch_name: str, *path: str) -> str | None:
+        if run is None:
+            return None
+        batch = next(
+            (
+                item
+                for item in run.batches
+                if item.batch_name == batch_name and item.status == "completed"
+            ),
+            None,
+        )
+        value = batch.parsed_output if batch is not None else None
+        for key in path:
+            value = value.get(key) if isinstance(value, dict) else None
+        return value if isinstance(value, str) else None
+
+    @staticmethod
+    def _compliance_status(run) -> str:
+        batch = next(
+            (
+                item
+                for item in run.batches
+                if item.batch_name == "compliance_appointment"
+            ),
+            None,
+        ) if run else None
+        if batch is None or batch.status != "completed" or not batch.parsed_output:
+            return "NOT_EVALUABLE"
+        compliance = batch.parsed_output.get("compliance")
+        rules = compliance.get("rule_results") if isinstance(compliance, dict) else None
+        if not isinstance(rules, dict):
+            return "NOT_EVALUABLE"
+        statuses = {
+            rule.get("status")
+            for rule in rules.values()
+            if isinstance(rule, dict)
+        }
+        if "DETECTED" in statuses:
+            return "FAILED"
+        if statuses and statuses == {"NOT_DETECTED"}:
+            return "PASSED"
+        return "REVIEW_REQUIRED"
 
     def get_overview_analytics(self, tenant_id: str = "health_campaign") -> Dict[str, Any]:
         with self.session_factory() as session:
@@ -100,24 +162,30 @@ class AnalyticsService:
                 avg_lat = round(sum(legacy_averages) / len(legacy_averages), 3)
             p95_lat = latency_percentiles.p95
 
-            # Evaluation results aggregations
-            eval_rows = self._latest_evaluations(session, tenant_id)
+            runs_by_interaction = self._latest_runs(session, tenant_id)
 
             quality_counts = Counter()
-            compliance_findings = {"PASSED": 0, "FAILED": 0}
+            compliance_findings = {
+                "PASSED": 0,
+                "FAILED": 0,
+                "REVIEW_REQUIRED": 0,
+                "NOT_EVALUABLE": 0,
+            }
             successful_outcomes = 0
 
-            for ev in eval_rows:
-                if ev.family == "quality":
-                    quality_counts[ev.label or "Can't tell"] += 1
-                elif ev.family == "compliance":
-                    if ev.label == "FAILED":
-                        compliance_findings["FAILED"] += 1
-                    else:
-                        compliance_findings["PASSED"] += 1
-                elif ev.family == "outcome":
-                    if ev.label in ["Expert call booked", "Call later agreed"]:
-                        successful_outcomes += 1
+            for run in runs_by_interaction.values():
+                quality_counts[
+                    run.summary.get("overall_assessment", "Can't tell")
+                ] += 1
+                compliance_findings[self._compliance_status(run)] += 1
+                outcome = self._batch_value(
+                    run,
+                    "conversation_understanding",
+                    "outcome",
+                    "label",
+                )
+                if outcome in ["Expert call booked", "Call later agreed"]:
+                    successful_outcomes += 1
 
             success_rate = round(successful_outcomes / total_interactions * 100, 1) if total_interactions > 0 else 0.0
 
@@ -145,25 +213,41 @@ class AnalyticsService:
 
     def get_quality_analytics(self, tenant_id: str = "health_campaign") -> Dict[str, Any]:
         with self.session_factory() as session:
-            eval_rows = self._latest_evaluations(session, tenant_id)
+            runs_by_interaction = self._latest_runs(session, tenant_id)
 
             outcomes = Counter()
             sentiment = Counter()
             emotion = Counter()
             overall_quality = Counter()
 
-            for ev in eval_rows:
-                if ev.family == "outcome":
-                    outcomes[ev.label or "Can't tell"] += 1
-                elif ev.family == "experience":
-                    sentiment[ev.label or "Neutral"] += 1
-                    try:
-                        details = json.loads(ev.details_json)
-                        emotion[details.get("emotion", "Neutral")] += 1
-                    except Exception:
-                        emotion["Neutral"] += 1
-                elif ev.family == "quality":
-                    overall_quality[ev.label or "Good"] += 1
+            for run in runs_by_interaction.values():
+                outcome = self._batch_value(
+                    run,
+                    "conversation_understanding",
+                    "outcome",
+                    "label",
+                )
+                if outcome is not None:
+                    outcomes[outcome] += 1
+                current_sentiment = self._batch_value(
+                    run,
+                    "conversation_understanding",
+                    "sentiment",
+                    "label",
+                )
+                if current_sentiment is not None:
+                    sentiment[current_sentiment] += 1
+                current_emotion = self._batch_value(
+                    run,
+                    "conversation_understanding",
+                    "emotion",
+                    "label",
+                )
+                if current_emotion is not None:
+                    emotion[current_emotion] += 1
+                overall = run.summary.get("overall_assessment")
+                if isinstance(overall, str):
+                    overall_quality[overall] += 1
 
             # Timelines failure analysis
             timeline_rows = session.scalars(
@@ -316,13 +400,7 @@ class AnalyticsService:
                 ).all()
             }
 
-            eval_rows = self._latest_evaluations(session, tenant_id)
-
-            evals_by_id: Dict[str, Dict[str, str]] = {}
-            for ev in eval_rows:
-                if ev.interaction_id not in evals_by_id:
-                    evals_by_id[ev.interaction_id] = {}
-                evals_by_id[ev.interaction_id][ev.family] = ev.label or ""
+            runs_by_id = self._latest_runs(session, tenant_id)
 
             items = []
             for row in interactions:
@@ -342,12 +420,26 @@ class AnalyticsService:
                     started_at = None
 
                 m = metrics.get(row.interaction_id)
-                e = evals_by_id.get(row.interaction_id, {})
+                run = runs_by_id.get(row.interaction_id)
 
-                outcome_label = e.get("outcome", "Can't tell")
-                quality_label = e.get("quality", "Good")
-                sentiment_label = e.get("experience", "Neutral")
-                compliance_label = e.get("compliance", "PASSED")
+                outcome_label = self._batch_value(
+                    run,
+                    "conversation_understanding",
+                    "outcome",
+                    "label",
+                ) or "Can't tell"
+                quality_label = (
+                    run.summary.get("overall_assessment", "Can't tell")
+                    if run
+                    else "Can't tell"
+                )
+                sentiment_label = self._batch_value(
+                    run,
+                    "conversation_understanding",
+                    "sentiment",
+                    "label",
+                ) or "Can't tell"
+                compliance_label = self._compliance_status(run) if run else "NOT_EVALUABLE"
 
                 # Filters
                 if status and status.lower() != call_status.lower():
@@ -378,7 +470,7 @@ class AnalyticsService:
                     "cost": m.total_cost if m else None,
                     "currency": m.cost_currency if m else None,
                     "cost_usd": m.total_cost if m and m.cost_currency == "USD" else None,
-                    "evaluations_count": len(e),
+                    "evaluations_count": len(run.batches) if run else 0,
                 })
 
             # Sort by started_at or interaction_id

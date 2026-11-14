@@ -25,6 +25,8 @@ def test_golden_call_label_save_and_retrieve(repo):
         first_thing_wrong_what="Agent line was cut.",
         never_rule_broken="None",
         reviewer_notes="Customer said no multiple times.",
+        conversation_status="COMPLETED",
+        language_slice="hi-en",
     )
 
     repo.save_label(label)
@@ -37,6 +39,8 @@ def test_golden_call_label_save_and_retrieve(repo):
     assert retrieved.what_happened == "Call reached an ending"
     assert retrieved.first_thing_wrong_line == 3
     assert retrieved.never_rule_broken == "None"
+    assert retrieved.conversation_status == "COMPLETED"
+    assert retrieved.language_slice == "hi-en"
 
 def test_golden_dataset_save_many_and_get_all(repo):
     l1 = GoldenCallLabel(

@@ -277,6 +277,8 @@ class GoldenCallLabelRow(Base):
     first_thing_wrong_what: Mapped[str | None] = mapped_column(Text, nullable=True)
     never_rule_broken: Mapped[str] = mapped_column(String(128), default="None")
     reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    language_slice: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -287,6 +289,9 @@ class HumanReviewRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
     evaluator_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluation_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, index=True
+    )
     original_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
     reviewed_label: Mapped[str] = mapped_column(String(128))
     review_decision: Mapped[str] = mapped_column(String(32))  # ACCEPTED, OVERRIDDEN
