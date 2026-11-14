@@ -6,6 +6,7 @@ import re
 import uuid
 import zipfile
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional
 from urllib.parse import unquote, urlparse
@@ -253,8 +254,11 @@ def create_app(session_factory) -> FastAPI:
         page_size: int = Query(default=20, ge=1, le=100),
         status: Optional[str] = Query(default=None),
         outcome: Optional[str] = Query(default=None),
-        quality: Optional[str] = Query(default=None),
         search: Optional[str] = Query(default=None),
+        started_after: Optional[datetime] = Query(default=None),
+        started_before: Optional[datetime] = Query(default=None),
+        use_case: Optional[str] = Query(default=None),
+        error_state: Optional[Literal["has_errors", "no_errors"]] = Query(default=None),
     ):
         return get_analytics_service().get_interactions_page(
             tenant_id=tenant_id,
@@ -262,8 +266,11 @@ def create_app(session_factory) -> FastAPI:
             page_size=page_size,
             status=status,
             outcome=outcome,
-            quality=quality,
             search=search,
+            started_after=started_after,
+            started_before=started_before,
+            use_case=use_case,
+            error_state=error_state,
         )
 
     @app.get("/api/v1/interactions/{interaction_id}", response_model=InteractionEnvelope)

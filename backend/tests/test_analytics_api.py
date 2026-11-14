@@ -35,7 +35,7 @@ def test_route_handlers_logic(app_instance):
     assert usage["usage_available"] is False
 
     interactions_route = next(r for r in app_instance.routes if r.path == "/api/v1/interactions" and "GET" in r.methods)
-    page = interactions_route.endpoint(page=1, page_size=10, status=None, outcome=None, quality=None, search=None, tenant_id="health_campaign")
+    page = interactions_route.endpoint(page=1, page_size=10, status=None, outcome=None, search=None, started_after=None, started_before=None, use_case=None, error_state=None, tenant_id="health_campaign")
     assert page["total"] == 0
     assert page["items"] == []
 

@@ -44,6 +44,12 @@ export const api = {
   getCost: (tenant = 'health_campaign') =>
     request('/analytics/cost', { headers: { 'X-Tenant-Id': tenant } }),
 
+  getReliability: (tenant = 'health_campaign') =>
+    request('/analytics/reliability', { headers: { 'X-Tenant-Id': tenant } }),
+
+  getUsage: (tenant = 'health_campaign') =>
+    request('/analytics/usage', { headers: { 'X-Tenant-Id': tenant } }),
+
   // Interactions
   getInteractionsList: (tenant = 'health_campaign') =>
     request('/interactions-list', { headers: { 'X-Tenant-Id': tenant } }),
@@ -55,6 +61,11 @@ export const api = {
 
   getInteraction: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}`, { headers: { 'X-Tenant-Id': tenant } }),
+
+  getObservability: (id, tenant = 'health_campaign') =>
+    request(`/interactions/${encodeURIComponent(id)}/observability`, {
+      headers: { 'X-Tenant-Id': tenant },
+    }),
 
   getTimeline: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/timeline`, { headers: { 'X-Tenant-Id': tenant } }),

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from collections import Counter
 from sqlalchemy import select, desc
@@ -474,30 +475,54 @@ class AnalyticsService:
         page_size: int = 20,
         status: Optional[str] = None,
         outcome: Optional[str] = None,
-        quality: Optional[str] = None,
         search: Optional[str] = None,
+        started_after: Optional[datetime] = None,
+        started_before: Optional[datetime] = None,
+        use_case: Optional[str] = None,
+        error_state: Optional[str] = None,
     ) -> Dict[str, Any]:
         with self.session_factory() as session:
             # Query all interactions
             stmt = select(InteractionRow).where(InteractionRow.tenant_id == tenant_id)
             interactions = session.scalars(stmt).all()
 
-            # Pre-load metrics and evaluations
-            metrics = {
-                r.interaction_id: r
-                for r in session.scalars(
-                    select(ObservabilityMetricsRow).where(ObservabilityMetricsRow.tenant_id == tenant_id)
+            runs_by_id = self._latest_runs(session, tenant_id)
+            timelines = {
+                row.interaction_id: row
+                for row in session.scalars(
+                    select(InteractionTimelineRow).where(
+                        InteractionTimelineRow.tenant_id == tenant_id
+                    )
                 ).all()
             }
+            failure_event_ids = {
+                row.interaction_id
+                for row in session.scalars(
+                    select(InteractionEventRow).where(
+                        InteractionEventRow.tenant_id == tenant_id
+                    )
+                ).all()
+                if "fail" in row.event_type.lower()
+                or "error" in row.event_type.lower()
+            }
 
-            runs_by_id = self._latest_runs(session, tenant_id)
+            def to_utc(value: datetime | None) -> datetime | None:
+                if value is None:
+                    return None
+                if value.tzinfo is None:
+                    return value.replace(tzinfo=timezone.utc)
+                return value.astimezone(timezone.utc)
 
+            normalized_started_after = to_utc(started_after)
+            normalized_started_before = to_utc(started_before)
             items = []
             for row in interactions:
                 call_data = {}
                 try:
                     payload = json.loads(row.payload_json)
                     call_data = payload.get("domain_data", {})
+                    if not isinstance(call_data, dict):
+                        call_data = {}
                     raw_status = payload.get("status") if isinstance(payload, dict) else None
                     call_status = (
                         raw_status
@@ -505,38 +530,79 @@ class AnalyticsService:
                         else "unknown"
                     )
                     started_at = payload.get("started_at")
+                    interaction_use_case = payload.get("use_case")
                 except Exception:
                     call_status = "unknown"
                     started_at = None
+                    interaction_use_case = None
 
-                m = metrics.get(row.interaction_id)
                 run = runs_by_id.get(row.interaction_id)
+                timeline = timelines.get(row.interaction_id)
+                has_errors = None
+                timeline_data = None
+                if timeline is not None:
+                    try:
+                        timeline_data = json.loads(timeline.timeline_json)
+                    except json.JSONDecodeError:
+                        timeline_data = None
+                if (
+                    call_status == "failed"
+                    or row.interaction_id in failure_event_ids
+                    or (
+                        timeline is not None
+                        and (
+                            timeline.first_technical_failure_type is not None
+                            or timeline.first_conversational_failure_type is not None
+                        )
+                    )
+                ):
+                    has_errors = True
+                elif isinstance(timeline_data, dict) and (
+                    isinstance(timeline_data.get("failures"), list)
+                    or (
+                        "first_technical_failure" in timeline_data
+                        and "first_conversational_failure" in timeline_data
+                    )
+                ):
+                    has_errors = False
 
                 outcome_label = self._batch_value(
                     run,
                     "conversation_understanding",
                     "outcome",
                     "label",
-                ) or "Can't tell"
-                quality_label = (
-                    run.summary.get("overall_assessment", "Can't tell")
-                    if run
-                    else "Can't tell"
                 )
-                sentiment_label = self._batch_value(
-                    run,
-                    "conversation_understanding",
-                    "sentiment",
-                    "label",
-                ) or "Can't tell"
-                compliance_label = self._compliance_status(run) if run else "NOT_EVALUABLE"
-
                 # Filters
                 if status and status.lower() != call_status.lower():
                     continue
-                if outcome and outcome.lower() not in outcome_label.lower():
+                if outcome and (
+                    outcome_label is None
+                    or outcome.lower() not in outcome_label.lower()
+                ):
                     continue
-                if quality and quality.lower() != quality_label.lower():
+                if use_case and (interaction_use_case or "").lower() != use_case.lower():
+                    continue
+                started_at_value = None
+                if isinstance(started_at, str):
+                    try:
+                        started_at_value = to_utc(
+                            datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                        )
+                    except ValueError:
+                        started_at_value = None
+                if normalized_started_after and (
+                    started_at_value is None
+                    or started_at_value < normalized_started_after
+                ):
+                    continue
+                if normalized_started_before and (
+                    started_at_value is None
+                    or started_at_value > normalized_started_before
+                ):
+                    continue
+                if error_state == "has_errors" and has_errors is not True:
+                    continue
+                if error_state == "no_errors" and has_errors is not False:
                     continue
                 folder_name = call_data.get("folder_name")
                 if search:
@@ -550,17 +616,9 @@ class AnalyticsService:
                     "folder_name": folder_name,
                     "started_at": started_at,
                     "status": call_status,
-                    "duration_s": m.recording_duration_s if m else None,
-                    "telephony_duration_s": m.telephony_duration_s if m else None,
-                    "turns_count": m.turn_count if m else 0,
+                    "use_case": interaction_use_case,
+                    "has_errors": has_errors,
                     "outcome": outcome_label,
-                    "quality": quality_label,
-                    "sentiment": sentiment_label,
-                    "compliance_status": compliance_label,
-                    "cost": m.total_cost if m else None,
-                    "currency": m.cost_currency if m else None,
-                    "cost_usd": m.total_cost if m and m.cost_currency == "USD" else None,
-                    "evaluations_count": len(run.batches) if run else 0,
                 })
 
             # Sort by started_at or interaction_id

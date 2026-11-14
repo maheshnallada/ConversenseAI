@@ -21,6 +21,23 @@ import {
   FolderOpen
 } from 'lucide-react';
 
+function getDeliveryState(event) {
+  const declaredStatus = typeof event.delivery_status === 'string'
+    ? event.delivery_status
+    : '';
+  const playbackStatus = typeof event.metadata?.playback_spoken === 'string'
+    ? event.metadata.playback_spoken
+    : '';
+  if (
+    declaredStatus &&
+    playbackStatus &&
+    declaredStatus.toLowerCase() !== playbackStatus.toLowerCase()
+  ) {
+    return 'mismatch';
+  }
+  return declaredStatus || playbackStatus || 'unknown';
+}
+
 export default function DrillDownView({ initialCallId, onSelectCallId }) {
   const [callList, setCallList] = useState([]);
   const [selectedCallId, setSelectedCallId] = useState(initialCallId || '');
@@ -30,7 +47,9 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   const [error, setError] = useState(null);
 
   // Call Data
+  const [interaction, setInteraction] = useState(null);
   const [timeline, setTimeline] = useState(null);
+  const [observabilityData, setObservabilityData] = useState(null);
   const [evaluationRun, setEvaluationRun] = useState(null);
   const [reviews, setReviews] = useState([]);
   const [audioUrl, setAudioUrl] = useState('');
@@ -39,7 +58,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
 
   // Timeline UI filters & controls
   const [speakerFilter, setSpeakerFilter] = useState('all'); // 'all', 'agent', 'customer'
-  const [deliveryFilter, setDeliveryFilter] = useState('all'); // 'all', 'heard', 'cut', 'not_played'
+  const [deliveryFilter, setDeliveryFilter] = useState('all');
   const [turnSearch, setTurnSearch] = useState('');
   const [expandAllDetails, setExpandAllDetails] = useState(null); // null, true, false
 
@@ -122,18 +141,24 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     setCurrentTime(0);
     setSeekTarget(null);
     setExpandAllDetails(null);
+    setInteraction(null);
     setTimeline(null);
+    setObservabilityData(null);
     setEvaluationRun(null);
     setReviews([]);
     try {
-      const [tlData, evalsData, revsData] = await Promise.all([
+      const [interactionData, tlData, obsData, evalsData, revsData] = await Promise.all([
+        api.getInteraction(id),
         api.getTimeline(id),
+        api.getObservability(id),
         api.getEvaluations(id),
         api.listReviews(id),
       ]);
 
       if (requestId !== loadRequestId.current) return;
+      setInteraction(interactionData);
       setTimeline(tlData);
+      setObservabilityData(obsData);
       setEvaluationRun(evalsData);
       setReviews(revsData);
     } catch (err) {
@@ -192,7 +217,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   };
 
   const formatFailureLabel = (str) => {
-    if (!str || str.toLowerCase() === 'none') return 'None';
+    if (!str || str.toLowerCase() === 'none') return 'Unavailable';
     return str
       .toLowerCase()
       .replace(/_/g, ' ')
@@ -208,10 +233,12 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     if (speakerFilter !== 'all' && e.speaker !== speakerFilter) return false;
 
     if (deliveryFilter !== 'all') {
-      const st = (e.delivery_status || e.metadata?.playback_spoken || '').toLowerCase();
-      if (deliveryFilter === 'cut' && !st.includes('cut')) return false;
+      const st = getDeliveryState(e).toLowerCase();
+      if (deliveryFilter === 'cut' && st !== 'cut') return false;
       if (deliveryFilter === 'heard' && st !== 'heard') return false;
       if (deliveryFilter === 'not_played' && st !== 'not_played') return false;
+      if (deliveryFilter === 'unknown' && st !== 'unknown') return false;
+      if (deliveryFilter === 'mismatch' && st !== 'mismatch') return false;
     }
 
     if (turnSearch) {
@@ -239,6 +266,9 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   ).length;
   const criticalIssues = evaluationRun?.summary?.critical_issues || [];
   const hasFailedBatches = evaluationBatches.some((batch) => batch.status === 'failed');
+  const observabilityMetrics = observabilityData?.metrics;
+  const formatMetric = (value, suffix = '') =>
+    value == null ? 'Unavailable' : `${value}${suffix}`;
 
   return (
     <div className="space-y-4">
@@ -399,13 +429,70 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
         onSeekTo={seekTarget}
       />
 
-      {/* 3. Telemetry Diagnostic Strip */}
+      <section className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200 mb-3">
+          Canonical interaction
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div><span className="text-slate-500">Status</span><div className="font-semibold">{interaction?.status || 'Unavailable'}</div></div>
+          <div><span className="text-slate-500">Use case</span><div className="font-semibold">{interaction?.use_case || 'Unavailable'}</div></div>
+          <div><span className="text-slate-500">Schema version</span><div className="font-semibold">{interaction?.schema_version || 'Unavailable'}</div></div>
+          <div><span className="text-slate-500">Started</span><div className="font-semibold">{interaction?.started_at ? new Date(interaction.started_at).toLocaleString() : 'Unavailable'}</div></div>
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+          Technical observability
+        </h3>
+        {!observabilityData?.available ? (
+          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 text-xs text-slate-500">
+            Observability metrics are unavailable for this interaction.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Recording</span>
+              <span className="text-sm font-bold">{formatMetric(observabilityMetrics?.recording_duration_s, 's')}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">First response</span>
+              <span className="text-sm font-bold">{formatMetric(observabilityMetrics?.first_agent_latency_s, 's')}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Input tokens</span>
+              <span className="text-sm font-bold">{observabilityMetrics?.input_tokens ?? 'Unavailable'}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Output tokens</span>
+              <span className="text-sm font-bold">{observabilityMetrics?.output_tokens ?? 'Unavailable'}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Estimated cost</span>
+              <span className="text-sm font-bold">{observabilityMetrics?.cost_breakdown?.total_cost == null ? 'Unavailable' : `${observabilityMetrics.cost_breakdown.total_cost} ${observabilityMetrics.cost_breakdown.currency || ''}`}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Timestamp quality</span>
+              <span className="text-sm font-bold">{observabilityMetrics?.timestamp_quality || 'Unavailable'}</span>
+            </div>
+            {observabilityMetrics?.playback_review_required && (
+              <div className="col-span-full p-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-800 dark:text-amber-300">
+                Playback metadata needs review. {observabilityMetrics.playback_mismatches?.length || 0} mismatch(es) were reported.
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+        Reconstructed timeline
+      </h3>
       {timeline && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
           <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800/80 bg-white dark:bg-slate-900/50 shadow-sm dark:shadow-none">
             <span className="text-[10px] font-sans text-slate-500 uppercase block font-semibold">Duration</span>
             <span className="text-sm font-bold font-sans text-slate-900 dark:text-slate-100 mt-0.5 block">
-              {timeline.total_duration_s ? `${timeline.total_duration_s.toFixed(1)}s` : 'N/A'}
+              {timeline.total_duration_s == null ? 'Unavailable' : `${timeline.total_duration_s.toFixed(1)}s`}
             </span>
           </div>
 
@@ -434,7 +521,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
             <span className="text-[10px] font-sans text-slate-500 uppercase block font-semibold">Tech Failure</span>
             <span
               className={`text-xs font-sans font-bold mt-1 block truncate ${
-                timeline.first_technical_failure ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
+                timeline.first_technical_failure ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-400'
               }`}
               title={timeline.first_technical_failure?.failure_type}
             >
@@ -446,7 +533,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
             <span className="text-[10px] font-sans text-slate-500 uppercase block font-semibold">Conversational Issue</span>
             <span
               className={`text-xs font-sans font-bold mt-1 block truncate ${
-                timeline.first_conversational_failure ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
+                timeline.first_conversational_failure ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-400'
               }`}
               title={timeline.first_conversational_failure?.failure_type}
             >
@@ -510,8 +597,8 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
                 </button>
               ))}
 
-              <span className="text-xs text-slate-500 ml-2 mr-1 font-semibold">Status:</span>
-              {['all', 'heard', 'cut', 'not_played'].map((st) => (
+              <span className="text-xs text-slate-500 ml-2 mr-1 font-semibold">Playback evidence:</span>
+              {['all', 'heard', 'cut', 'not_played', 'unknown', 'mismatch'].map((st) => (
                 <button
                   key={st}
                   onClick={() => setDeliveryFilter(st)}
@@ -581,7 +668,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider font-sans">
-                  Evaluation batches
+                  Semantic evaluation batches
                 </h3>
               </div>
               <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold font-sans">

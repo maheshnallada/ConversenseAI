@@ -228,7 +228,8 @@ def test_interactions_page_pagination(analytics_service):
     first = page1["items"][0]
     assert "interaction_id" in first
     assert "status" in first
-    assert "cost_usd" in first
+    assert "use_case" in first
+    assert "has_errors" in first
 
 
 def test_overview_classifies_noncompleted_statuses_separately():
@@ -316,9 +317,8 @@ def test_analytics_uses_latest_versioned_run_not_archival_results():
     assert "quality_distribution" not in overview
     assert quality["outcomes"] == {"Not interested": 1}
     assert quality["overall_quality"] == {"Bad": 1}
-    assert page["items"][0]["quality"] == "Bad"
     assert page["items"][0]["outcome"] == "Not interested"
-    assert page["items"][0]["evaluations_count"] == 3
+    assert "quality" not in page["items"][0]
 
 
 def test_cost_analytics_does_not_sum_mixed_currencies():

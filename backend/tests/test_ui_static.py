@@ -30,6 +30,78 @@ def test_drilldown_consumes_evaluation_run_and_renders_all_batches():
     assert "evaluationRun?.summary" in source
     assert "api.evaluate(" in source
     assert "selectedCallId," in source
+    assert "api.getObservability(" in source
+    assert "Technical observability" in source
+    assert "Semantic evaluation" in source
+    assert "observabilityData?.available" in source
+    assert "|| 'heard'" not in source
+
+
+def test_overview_reads_operational_overview_reliability_and_usage_separately():
+    source = (
+        REPOSITORY_ROOT / "frontend" / "src" / "views" / "OverviewView.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "api.getOverview()" in source
+    assert "api.getReliability()" in source
+    assert "api.getUsage()" in source
+    assert "api.getQuality()" not in source
+    assert "quality_distribution" not in source
+    assert "Unavailable" in source
+
+
+def test_interactions_view_exposes_design_supported_filters():
+    source = (
+        REPOSITORY_ROOT / "frontend" / "src" / "views" / "InteractionsView.jsx"
+    ).read_text(encoding="utf-8")
+
+    for filter_name in (
+        "started_after",
+        "started_before",
+        "use_case",
+        "status",
+        "outcome",
+        "error_state",
+    ):
+        assert filter_name in source
+
+
+def test_timeline_turn_card_does_not_infer_heard_without_playback_metadata():
+    source = (
+        REPOSITORY_ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "TimelineTurnCard.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "deliveryStatus = event.delivery_status || event.metadata?.playback_spoken || 'heard'" not in source
+    assert "mismatch" in source
+    assert "unknown" in source
+
+
+def test_timeline_markers_do_not_infer_zero_duration_from_missing_evidence():
+    source = (
+        REPOSITORY_ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "TimelineMarker.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "event.duration_s ? event.duration_s.toFixed(1) : '0.0'" not in source
+    assert "Unavailable" in source
+
+
+def test_missing_failure_evidence_does_not_render_as_success():
+    source = (
+        REPOSITORY_ROOT / "frontend" / "src" / "views" / "DrillDownView.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "if (!str || str.toLowerCase() === 'none') return 'None';" not in source
+    assert "timeline.first_technical_failure ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'" not in source
+    assert "timeline.first_conversational_failure ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'" not in source
+    assert "return 'Unavailable';" in source
 
 
 def test_review_modal_submits_batch_evaluation_id():

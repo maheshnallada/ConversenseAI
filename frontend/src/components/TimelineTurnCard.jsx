@@ -3,7 +3,6 @@ import {
   Bot,
   User,
   Scissors,
-  Volume2,
   VolumeX,
   Play,
   ChevronDown,
@@ -31,20 +30,25 @@ export default function TimelineTurnCard({
   const start = event.start_s ?? 0;
   const end = event.end_s ?? 0;
   const duration = event.duration_s ?? (end - start);
-  const deliveryStatus = event.delivery_status || event.metadata?.playback_spoken || 'heard';
-
   const meta = event.metadata || {};
+  const reportedDeliveryStatus = typeof event.delivery_status === 'string'
+    ? event.delivery_status
+    : null;
+  const playbackStatus = typeof meta.playback_spoken === 'string'
+    ? meta.playback_spoken
+    : null;
+  const deliveryStatus = reportedDeliveryStatus || playbackStatus || 'unknown';
+  const deliveryMismatch = Boolean(
+    reportedDeliveryStatus &&
+    playbackStatus &&
+    reportedDeliveryStatus.toLowerCase() !== playbackStatus.toLowerCase()
+  );
+  const visibleDeliveryStatus = deliveryMismatch ? 'mismatch' : deliveryStatus;
   const normalizedText = meta.normalized_text ?? null;
-  const playbackSpoken = meta.playback_spoken ?? deliveryStatus ?? null;
+  const playbackSpoken = playbackStatus;
   const playbackHeardText = meta.playback_heard_text ?? null;
   const bargedIn = meta.barged_in ?? null;
-  const deliveryEvidence = meta.delivery_evidence ?? (
-    deliveryStatus === 'heard'
-      ? 'Line fully heard by customer according to playback metadata'
-      : deliveryStatus === 'cut'
-      ? 'Line was cut during playback due to barge-in or interruption'
-      : 'Playback skipped or not delivered'
-  );
+  const deliveryEvidence = meta.delivery_evidence ?? null;
 
   const formatTime = (secs) => {
     if (secs === null || secs === undefined || isNaN(secs)) return '00:00.0';
@@ -62,7 +66,7 @@ export default function TimelineTurnCard({
   };
 
   const getDeliveryPill = () => {
-    const st = String(deliveryStatus).toLowerCase();
+    const st = String(visibleDeliveryStatus).toLowerCase();
     if (st === 'heard') {
       return (
         <span className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/70 dark:border-emerald-500/30 dark:text-emerald-400 font-medium">
@@ -84,9 +88,16 @@ export default function TimelineTurnCard({
         </span>
       );
     }
+    if (st === 'mismatch') {
+      return (
+        <span className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/70 dark:border-amber-500/30 dark:text-amber-300">
+          playback mismatch
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-        {deliveryStatus}
+        {visibleDeliveryStatus}
       </span>
     );
   };
@@ -217,7 +228,7 @@ export default function TimelineTurnCard({
                     {playbackSpoken}
                   </span>
                 ) : (
-                  <span className="text-slate-400 dark:text-slate-500 italic">null</span>
+                  <span className="text-slate-400 dark:text-slate-500 italic">unknown</span>
                 )}
               </span>
             </div>
@@ -258,7 +269,7 @@ export default function TimelineTurnCard({
             <div className="p-2.5 flex flex-col sm:flex-row sm:items-start justify-between gap-2">
               <span className="text-slate-500 dark:text-slate-400 font-semibold sm:w-44 shrink-0">delivery_evidence:</span>
               <span className="text-cyan-800 dark:text-cyan-300 text-xs font-sans leading-relaxed flex-1 bg-cyan-50 dark:bg-cyan-950/30 p-2.5 rounded-lg border border-cyan-200 dark:border-cyan-800/30">
-                {deliveryEvidence || <span className="text-slate-400 dark:text-slate-500 italic">null</span>}
+                {deliveryEvidence || <span className="text-slate-400 dark:text-slate-500 italic">unknown</span>}
               </span>
             </div>
           </div>
