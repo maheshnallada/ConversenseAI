@@ -13,7 +13,8 @@ CALLS_DIR = PROJECT_ROOT / "data" / "calls"
 
 
 def test_full_dataset_transcript_processing():
-    assert CALLS_DIR.exists()
+    if not CALLS_DIR.is_dir():
+        pytest.skip("External call dataset is unavailable")
 
     factory = create_session_factory("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     init_db(factory)
@@ -46,10 +47,13 @@ def test_full_dataset_transcript_processing():
             total_turns += 1
             if t.speaker == "agent":
                 agent_turns += 1
-                if t.playback_spoken in spoken_marks:
-                    spoken_marks[t.playback_spoken] += 1
-                else:
+                if t.playback_spoken is None:
                     spoken_marks["none"] += 1
+                else:
+                    assert t.playback_spoken in spoken_marks, (
+                        f"Unexpected playback status: {t.playback_spoken!r}"
+                    )
+                    spoken_marks[t.playback_spoken] += 1
             elif t.speaker == "customer":
                 customer_turns += 1
 
