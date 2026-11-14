@@ -1,0 +1,39 @@
+{
+  "currency": "USD",
+  "rates": {
+    "llm": {
+      "gemini-3.5-flash-lite": {
+        "input_per_1m": 0.30,
+        "output_per_1m": 2.50
+      },
+      "gpt-4o-mini": {
+        "input_per_1m": 0.15,
+        "output_per_1m": 0.60
+      }
+    },
+    "stt": {
+      "pulse": {
+        "per_minute": 0.006
+      }
+    },
+    "tts": {
+      "bulbul:v3": {
+        "per_minute": 0.015
+      },
+      "lightning-v3.1": {
+        "per_minute": 0.015
+      }
+    },
+    "telephony": {
+      "phone": {
+        "per_minute": 0.01
+      }
+    }
+  },
+  "routing": {
+    "base_url": null,
+    "api_key": null,
+    "model": "gemini-3.5-flash-lite"
+  }
+}
+
