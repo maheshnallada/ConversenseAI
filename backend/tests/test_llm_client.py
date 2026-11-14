@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from openai import APITimeoutError, RateLimitError
+from openai import APITimeoutError, LengthFinishReasonError, RateLimitError
 from pydantic import BaseModel, ValidationError
 
 import app.evaluation.llm_client as llm_client_module
@@ -277,4 +277,13 @@ def test_async_sdk_schema_parse_error_is_typed(monkeypatch):
     _mock_async_sdk_client(monkeypatch, error=validation_error.value)
 
     with pytest.raises(LLMResponseError):
+        asyncio.run(complete_structured([], StructuredResponse))
+
+
+def test_async_truncated_structured_response_is_typed(monkeypatch):
+    _configure_llm(monkeypatch)
+    error = LengthFinishReasonError(completion=SimpleNamespace(usage=None))
+    _mock_async_sdk_client(monkeypatch, error=error)
+
+    with pytest.raises(LLMResponseError, match="truncated"):
         asyncio.run(complete_structured([], StructuredResponse))

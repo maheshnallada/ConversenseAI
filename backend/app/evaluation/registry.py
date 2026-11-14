@@ -146,11 +146,18 @@ class EvaluatorRegistry:
                     provider=os.getenv("LLM_PROVIDER", "unknown").lstrip("@"),
                 )
             validation = validate_batch_evidence(batch_name, result, turns)
+            if validation.sensitive_data_detected:
+                raise LLMResponseError(
+                    "Provider output contained a prohibited sensitive customer "
+                    "identifier; batch output was discarded",
+                    model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+                    provider=os.getenv("LLM_PROVIDER", "unknown").lstrip("@"),
+                )
             review_required = not (
                 validation.schema_valid and validation.evidence_valid
             )
             completed_at = datetime.now(timezone.utc)
-            result_data = result.model_dump(mode="json")
+            result_data = result.model_dump(mode="json") if turns else None
             return EvaluationBatchRecord(
                 evaluation_id=str(uuid4()),
                 batch_name=batch_name,
@@ -162,7 +169,9 @@ class EvaluatorRegistry:
                 completed_at=completed_at,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                raw_output=raw_output or result.model_dump_json(),
+                raw_output=(
+                    (raw_output or result.model_dump_json()) if turns else None
+                ),
                 parsed_output=result_data,
                 validation=asdict(validation),
                 review_required=review_required,

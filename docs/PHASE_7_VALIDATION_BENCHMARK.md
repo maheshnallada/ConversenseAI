@@ -12,7 +12,7 @@ The evaluator produces three independent batches:
 
 Each run records a status, model, prompt and schema versions, validation details, and any provider error for every batch. Provider failures remain visible as failed batches. Retries create a new run, reuse successful batches from the selected source run, and rerun its failed batches.
 
-Evidence validation checks each cited line and exact quote against the supplied transcript. Invalid evidence is retained for review, but cannot support evidence-dependent derivations. The dashboard exposes validation state and review reasons; it does not display confidence or present a combined numeric score.
+Evidence validation checks each cited line and exact quote against the supplied transcript. Non-null quality scores require supporting citations, and an empty transcript cannot produce an assessment. Explicit consent requires a customer citation; an unqualified acknowledgement remains for human review and cannot validate a booking. Invalid evidence is retained for review, but cannot support evidence-dependent derivations. Prohibited sensitive identifiers are not returned as customer facts. The dashboard exposes validation state and review reasons; it does not display confidence or present a combined numeric score.
 
 ## Reported metrics
 

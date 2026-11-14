@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from openai import LengthFinishReasonError
 from pydantic import ValidationError
 
 from app.evaluation.prompts import BATCH_SYSTEM_PROMPTS
@@ -757,3 +758,152 @@ def test_invalid_evidence_is_not_used_for_the_derived_assessment():
     )
 
     assert run.summary["overall_assessment"] == "Can't tell"
+
+
+def test_truncated_batch_failure_preserves_successful_sibling_batches(
+    monkeypatch,
+):
+    import app.evaluation.llm_client as llm_client_module
+
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    truncated = LengthFinishReasonError(completion=SimpleNamespace(usage=None))
+
+    class AsyncCompletions:
+        async def parse(self, *, response_format, **_kwargs):
+            if response_format is ConversationQualityResult:
+                raise truncated
+            result = response_format.model_validate(_batch_payload(response_format))
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            parsed=result,
+                            refusal=None,
+                            content=None,
+                        )
+                    )
+                ],
+                usage=None,
+            )
+
+    class AsyncSDKClient:
+        def __init__(self, **_kwargs):
+            self.beta = SimpleNamespace(
+                chat=SimpleNamespace(
+                    completions=AsyncCompletions(),
+                )
+            )
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(llm_client_module, "AsyncOpenAI", AsyncSDKClient)
+    run = asyncio.run(
+        EvaluatorRegistry().evaluate_batches(
+            _batch_interaction(),
+            [_batch_turn()],
+        )
+    )
+
+    assert sum(batch.status == "completed" for batch in run.batches) == 2
+    failed = next(
+        batch for batch in run.batches if batch.batch_name == "conversation_quality"
+    )
+    assert failed.status == "failed"
+    assert failed.error_type == "LLMResponseError"
+
+
+def test_empty_transcript_quality_scores_do_not_create_a_good_assessment():
+    async def structured_caller(_messages, response_model):
+        payload = _batch_payload(response_model)
+        if response_model is ConversationUnderstandingResult:
+            for field in ("outcome", "sentiment", "emotion"):
+                payload[field]["evidence_line"] = None
+                payload[field]["quote"] = ""
+        if response_model is ConversationQualityResult:
+            for dimension in payload["conversation_quality"]["dimensions"].values():
+                dimension["evidence_line"] = None
+                dimension["quote"] = ""
+        return response_model.model_validate(payload)
+
+    run = asyncio.run(
+        EvaluatorRegistry(structured_caller=structured_caller).evaluate_batches(
+            _batch_interaction(),
+            [],
+        )
+    )
+
+    quality = next(
+        batch for batch in run.batches if batch.batch_name == "conversation_quality"
+    )
+    assert quality.status == "review_required"
+    assert quality.parsed_output is None
+    assert quality.raw_output is None
+    assert run.summary["overall_assessment"] == "Can't tell"
+
+
+def test_non_null_quality_scores_require_transcript_evidence():
+    async def structured_caller(_messages, response_model):
+        payload = _batch_payload(response_model)
+        if response_model is ConversationQualityResult:
+            for dimension in payload["conversation_quality"]["dimensions"].values():
+                dimension["evidence_line"] = None
+                dimension["quote"] = ""
+        return response_model.model_validate(payload)
+
+    run = asyncio.run(
+        EvaluatorRegistry(structured_caller=structured_caller).evaluate_batches(
+            _batch_interaction(),
+            [_batch_turn()],
+            batch_names={"conversation_quality"},
+        )
+    )
+
+    assert run.batches[0].status == "review_required"
+    assert run.summary["overall_assessment"] == "Can't tell"
+
+
+def test_sensitive_customer_fact_is_discarded_from_batch_output():
+    sensitive_identifier = "1234 5678 9012"
+
+    async def structured_caller(_messages, response_model):
+        payload = _batch_payload(response_model)
+        if response_model is ConversationUnderstandingResult:
+            payload["customer_facts"] = [
+                {
+                    "category": "other_relevant_facts",
+                    "field": "identity_number",
+                    "value": sensitive_identifier,
+                    "evidence_line": 1,
+                    "quote": f"My identity number is {sensitive_identifier}.",
+                }
+            ]
+        return response_model.model_validate(payload)
+
+    run = asyncio.run(
+        EvaluatorRegistry(structured_caller=structured_caller).evaluate_batches(
+            _batch_interaction(),
+            [
+                TranscriptTurn(
+                    turn_id="turn-1",
+                    interaction_id="interaction-1",
+                    tenant_id="tenant-1",
+                    turn_index=1,
+                    speaker="customer",
+                    raw_text=f"My identity number is {sensitive_identifier}.",
+                    normalized_text=f"My identity number is {sensitive_identifier}.",
+                )
+            ],
+            batch_names={"conversation_understanding"},
+        )
+    )
+
+    batch = run.batches[0]
+    assert batch.status == "failed"
+    assert batch.parsed_output is None
+    assert batch.raw_output is None
+    assert sensitive_identifier not in str(batch)

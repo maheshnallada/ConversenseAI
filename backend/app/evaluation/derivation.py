@@ -6,6 +6,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.domain.timeline import ReconstructedTimeline
+from app.evaluation.evidence import is_unqualified_acknowledgement
 from app.evaluation.schemas import AppointmentInterpretation
 
 
@@ -138,6 +139,17 @@ def derive_appointment_validity(
             status="INVALID",
             valid=False,
             reason="A confirmed expert appointment lacks explicit customer consent.",
+            appointment_at=booked_at,
+        )
+    if (
+        interpretation.consent_evidence_line is None
+        or not interpretation.consent_quote.strip()
+        or is_unqualified_acknowledgement(interpretation.consent_quote)
+    ):
+        return AppointmentValidation(
+            status="NOT_EVALUABLE",
+            valid=None,
+            reason="Explicit customer consent is not supported by clear cited evidence.",
             appointment_at=booked_at,
         )
     if not timezone_name:

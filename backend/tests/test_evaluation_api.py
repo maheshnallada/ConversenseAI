@@ -6,7 +6,9 @@ from app.api.app import (
     EvaluateInteractionRequest,
     HumanReviewSubmission,
 )
+from app.domain.envelope import InteractionEnvelope
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
+from app.evaluation.service import EvaluationService
 from app.storage.evaluation_repo import EvaluationRepository
 
 @pytest.fixture
@@ -206,4 +208,65 @@ def test_api_routes_registered(test_app):
     assert "/api/v1/interactions/{interaction_id}/evaluations" in routes
     assert "/api/v1/interactions/process-and-evaluate" in routes
     assert "/api/v1/evaluators" not in routes
+
+
+def test_review_required_compliance_batch_does_not_drive_appointment_validation(
+    session_factory,
+):
+    started_at = datetime.now(timezone.utc)
+    batch = EvaluationBatchRecord(
+        evaluation_id="evaluation-review",
+        batch_name="compliance_appointment",
+        status="review_required",
+        model="test-model",
+        prompt_version="1",
+        schema_version="1",
+        started_at=started_at,
+        completed_at=started_at,
+        input_tokens=None,
+        output_tokens=None,
+        raw_output="{}",
+        parsed_output={
+            "compliance": {
+                "rule_results": {
+                    f"NR00{index}": {
+                        "status": "NOT_DETECTED",
+                        "evidence_line": None,
+                        "quote": "",
+                        "reason": "",
+                    }
+                    for index in range(1, 7)
+                },
+                "potential_violations": [],
+            },
+            "appointment_interpretation": {
+                "appointment_type": "EXPERT_CALL",
+                "consent_status": "EXPLICIT",
+                "consent_evidence_line": None,
+                "consent_quote": "",
+                "agent_proposal_line": None,
+                "agent_proposal_quote": "",
+                "date_text": None,
+                "time_text": None,
+                "interpreted_date": None,
+                "interpreted_time": None,
+                "interpretation_reason": "No verified consent evidence.",
+            },
+        },
+        validation={"schema_valid": True, "evidence_valid": False},
+        review_required=True,
+        review_status="required",
+        review_reasons=["appointment consent evidence is missing"],
+    )
+
+    result = EvaluationService(session_factory)._derive_appointment_validation(
+        InteractionEnvelope(
+            tenant_id="tenant-1",
+            interaction_id="interaction-1",
+            schema_version="1.0",
+        ),
+        [batch],
+    )
+
+    assert result is None
 

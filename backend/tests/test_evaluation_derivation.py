@@ -76,6 +76,40 @@ def test_ambiguous_okay_consent_does_not_validate_booking():
     assert "consent" in result.reason.lower()
 
 
+def test_explicit_consent_without_cited_evidence_is_not_evaluable():
+    interpretation = _interpretation().model_copy(
+        update={"consent_evidence_line": None, "consent_quote": ""}
+    )
+
+    result = derive_appointment_validity(
+        interpretation,
+        _booking("2026-11-15T11:00:00+05:30"),
+        date(2026, 11, 14),
+        "Asia/Kolkata",
+        _rules(),
+    )
+
+    assert result.status == "NOT_EVALUABLE"
+    assert result.valid is None
+
+
+def test_explicit_consent_from_unqualified_acknowledgement_is_not_evaluable():
+    interpretation = _interpretation().model_copy(
+        update={"consent_quote": "Okay."}
+    )
+
+    result = derive_appointment_validity(
+        interpretation,
+        _booking("2026-11-15T11:00:00+05:30"),
+        date(2026, 11, 14),
+        "Asia/Kolkata",
+        _rules(),
+    )
+
+    assert result.status == "NOT_EVALUABLE"
+    assert result.valid is None
+
+
 def test_callback_is_not_an_expert_appointment():
     result = derive_appointment_validity(
         _interpretation(appointment_type="CALLBACK"),

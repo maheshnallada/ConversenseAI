@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urlparse
 
-from openai import APIError, AsyncOpenAI, OpenAI
+from openai import APIError, AsyncOpenAI, LengthFinishReasonError, OpenAI
 from pydantic import BaseModel, ValidationError
 
 from app.evaluation.errors import (
@@ -73,6 +73,12 @@ async def complete_structured_with_usage(
                 temperature=0.0,
                 response_format=response_model,
             )
+    except LengthFinishReasonError:
+        raise LLMResponseError(
+            "Provider returned truncated structured output",
+            model=model,
+            provider=provider,
+        ) from None
     except APIError as error:
         raise LLMRequestError(
             f"Structured request failed ({type(error).__name__})",

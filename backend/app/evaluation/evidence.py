@@ -1,3 +1,5 @@
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -6,6 +8,7 @@ from pydantic import BaseModel
 from app.domain.transcript import TranscriptTurn
 from app.evaluation.schemas import (
     ComplianceAppointmentResult,
+    CustomerFact,
     ConversationQualityResult,
     ConversationUnderstandingResult,
 )
@@ -24,6 +27,75 @@ class ValidationReport:
     evidence_valid: bool
     issues: list[str]
     review_reasons: list[str]
+    sensitive_data_detected: bool = False
+
+
+_SENSITIVE_IDENTIFIER_LABEL = re.compile(
+    r"\b(?:aadhaar|aadhar|uidai|otp|one[-\s]?time password|"
+    r"bank(?:\s+(?:account|details|credentials|login))?|"
+    r"(?:online|internet) banking|password|passcode|cvv|pin)\b",
+    re.IGNORECASE,
+)
+_PAN_IDENTIFIER = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b", re.IGNORECASE)
+_TWELVE_DIGIT_IDENTIFIER = re.compile(r"(?<!\d)(?:\d[\s-]?){11}\d(?!\d)")
+_UNQUALIFIED_ACKNOWLEDGEMENTS = {
+    "ok",
+    "okay",
+    "yes",
+    "yeah",
+    "yep",
+    "sure",
+    "fine",
+    "alright",
+    "right",
+    "సరే",
+    "అవును",
+    "हाँ",
+    "हां",
+    "ठीक है",
+    "হ্যাঁ",
+    "জি",
+    "சரி",
+    "ஆம்",
+    "ಸರಿ",
+    "ಹೌದು",
+    "ശരി",
+    "അതെ",
+    "હા",
+    "બરાબર",
+    "हो",
+    "होय",
+}
+
+
+def _contains_sensitive_customer_identifier(fact: CustomerFact) -> bool:
+    text = " ".join(
+        str(value)
+        for value in (fact.category, fact.field, fact.value, fact.quote)
+        if value is not None
+    )
+    normalized_text = re.sub(r"[_-]+", " ", text)
+    if _SENSITIVE_IDENTIFIER_LABEL.search(
+        normalized_text
+    ) or _PAN_IDENTIFIER.search(text):
+        return True
+
+    field = re.sub(r"[_-]+", " ", fact.field)
+    identity_field = re.search(
+        r"\b(?:identity|national\s+id)\b",
+        field,
+        re.IGNORECASE,
+    )
+    value_and_quote = " ".join(str(value) for value in (fact.value, fact.quote))
+    return bool(
+        identity_field and _TWELVE_DIGIT_IDENTIFIER.search(value_and_quote)
+    )
+
+
+def is_unqualified_acknowledgement(quote: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", quote).casefold()
+    normalized = " ".join(re.findall(r"\w+", normalized))
+    return normalized in _UNQUALIFIED_ACKNOWLEDGEMENTS
 
 
 def _check_citation(
@@ -108,6 +180,7 @@ def _validate_result_evidence(
     result: BaseModel,
     turns: list[TranscriptTurn],
     issues: list[str],
+    sensitive_data: list[bool],
 ) -> None:
     turns_by_line: dict[int, list[TranscriptTurn]] = {}
     for turn in turns:
@@ -151,6 +224,11 @@ def _validate_result_evidence(
             "customer",
         )
         for index, fact in enumerate(understanding.customer_facts):
+            if _contains_sensitive_customer_identifier(fact):
+                sensitive_data.append(True)
+                issues.append(
+                    f"customer_facts[{index}]: contains a prohibited sensitive identifier"
+                )
             check(
                 f"customer_facts[{index}]",
                 fact.evidence_line,
@@ -162,6 +240,12 @@ def _validate_result_evidence(
     if batch_name == "conversation_quality":
         quality = result
         assert isinstance(quality, ConversationQualityResult)
+        for name, dimension in quality.conversation_quality.dimensions:
+            if dimension.score is not None and dimension.evidence_line is None:
+                issues.append(
+                    f"conversation_quality.dimensions.{name}: "
+                    "a non-null score requires transcript evidence"
+                )
         for field, line, quote, speaker, quote_optional in _iter_quality_citations(
             quality
         ):
@@ -185,6 +269,20 @@ def _validate_result_evidence(
                 violation.quote,
             )
         appointment = compliance.appointment_interpretation
+        if appointment.consent_status == "EXPLICIT":
+            if (
+                appointment.consent_evidence_line is None
+                or not appointment.consent_quote.strip()
+            ):
+                issues.append(
+                    "appointment_interpretation.consent: "
+                    "explicit consent requires customer evidence"
+                )
+            elif is_unqualified_acknowledgement(appointment.consent_quote):
+                issues.append(
+                    "appointment_interpretation.consent: "
+                    "an unqualified acknowledgement cannot establish explicit consent"
+                )
         check(
             "appointment_interpretation.consent",
             appointment.consent_evidence_line,
@@ -217,10 +315,14 @@ def validate_batch_evidence(
         return ValidationReport(False, False, issues, issues.copy())
 
     issues: list[str] = []
-    _validate_result_evidence(batch_name, result, turns, issues)
+    if not turns:
+        issues.append("Transcript is empty; evidence cannot be validated.")
+    sensitive_data: list[bool] = []
+    _validate_result_evidence(batch_name, result, turns, issues, sensitive_data)
     return ValidationReport(
         schema_valid=True,
         evidence_valid=not issues,
         issues=issues,
         review_reasons=issues.copy(),
+        sensitive_data_detected=bool(sensitive_data),
     )

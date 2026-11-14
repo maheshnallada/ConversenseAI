@@ -271,6 +271,10 @@ class EvaluationService:
                 batch
                 for batch in batches
                 if batch.batch_name == "compliance_appointment"
+                and batch.status == "completed"
+                and not batch.review_required
+                and batch.validation.get("schema_valid") is True
+                and batch.validation.get("evidence_valid") is True
                 and batch.parsed_output is not None
             ),
             None,
