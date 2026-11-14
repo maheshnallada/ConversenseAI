@@ -90,3 +90,32 @@ def test_interaction_metrics_preserve_raw_sequential_latency_samples():
 
     assert metrics.response_latency_samples == [0.5]
 
+
+def test_root_level_usage_populates_all_usage_metrics():
+    call_data = {
+        "usage": {
+            "line": {"connected_s": 120.0},
+            "llm": {"input_tokens": 100000, "output_tokens": 10000},
+            "stt": {"audio_s": 60.0},
+            "tts": {"audio_s": 30.0, "model": "bulbul:v3"},
+        },
+        "models": {"provider": "gemini", "model": "gemini-3.5-flash-lite"},
+    }
+
+    metrics = calculate_interaction_metrics(
+        tenant_id="tenant_root_usage",
+        interaction_id="call_root_usage",
+        call_data=call_data,
+        turns=[],
+        rate_card=RateCardManager(),
+    )
+
+    assert metrics.telephony_duration_s == 120.0
+    assert metrics.input_tokens == 100000
+    assert metrics.output_tokens == 10000
+    assert metrics.cost_breakdown.llm_cost is not None
+    assert metrics.cost_breakdown.stt_cost is not None
+    assert metrics.cost_breakdown.tts_cost is not None
+    assert metrics.cost_breakdown.telephony_cost is not None
+    assert metrics.cost_breakdown.total_cost is not None
+

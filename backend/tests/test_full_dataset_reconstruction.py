@@ -12,7 +12,7 @@ from app.storage.timeline_repo import TimelineRepository
 from app.validation.audio import validate_call_files
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CALLS_DIR = PROJECT_ROOT / "data" / "calls"
+CALLS_DIR = PROJECT_ROOT / "backend" / "storage" / "artifacts" / "health_campaign"
 
 
 def test_full_dataset_timeline_reconstruction():

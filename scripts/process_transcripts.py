@@ -18,7 +18,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default=str(Path(__file__).resolve().parent.parent / "data" / "calls"),
+        default=None,
         help="Path to calls directory",
     )
     parser.add_argument(
@@ -43,7 +43,17 @@ def main():
     repo = TranscriptRepository(factory)
     processor = TranscriptProcessor()
 
-    calls_dir = Path(args.data_dir).resolve()
+    artifact_root = Path(
+        os.getenv("ARTIFACT_STORAGE_PATH")
+        or backend_path / "storage" / "artifacts"
+    )
+    calls_dir = (
+        Path(args.data_dir).resolve()
+        if args.data_dir
+        else (artifact_root / args.tenant_id).resolve()
+    )
+    if not calls_dir.is_dir():
+        raise FileNotFoundError(f"Calls directory does not exist: {calls_dir}")
     call_folders = sorted(
         [d for d in calls_dir.iterdir() if d.is_dir() and d.name.startswith("call_")],
         key=lambda d: d.name,
@@ -67,10 +77,15 @@ def main():
             total_turns += 1
             if t.speaker == "agent":
                 total_agent_turns += 1
-                if t.playback_spoken in spoken_counts:
+                if t.playback_spoken is None:
+                    spoken_counts["none"] += 1
+                elif t.playback_spoken in {"heard", "cut", "not_played", "no_audio"}:
                     spoken_counts[t.playback_spoken] += 1
                 else:
-                    spoken_counts["none"] += 1
+                    raise ValueError(
+                        f"Unexpected playback status in {folder.name}: "
+                        f"{t.playback_spoken!r}"
+                    )
             elif t.speaker == "customer":
                 total_customer_turns += 1
 

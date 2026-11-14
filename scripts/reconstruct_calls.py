@@ -17,8 +17,10 @@ from app.validation.audio import validate_call_files
 
 
 def _connected_seconds(call_data):
-    usage = (call_data.get("meta") or {}).get("usage") or {}
-    return (usage.get("line") or {}).get("connected_s")
+    meta = call_data.get("meta")
+    usage = meta.get("usage") if isinstance(meta, dict) else None
+    line = usage.get("line") if isinstance(usage, dict) else None
+    return line.get("connected_s") if isinstance(line, dict) else None
 
 
 def main():
@@ -26,7 +28,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default=str(Path(__file__).resolve().parent.parent / "data" / "calls"),
+        default=None,
         help="Path to calls directory",
     )
     parser.add_argument(
@@ -52,7 +54,17 @@ def main():
     processor = TranscriptProcessor()
     reconstructor = TimelineReconstructor()
 
-    calls_dir = Path(args.data_dir).resolve()
+    artifact_root = Path(
+        os.getenv("ARTIFACT_STORAGE_PATH")
+        or backend_path / "storage" / "artifacts"
+    )
+    calls_dir = (
+        Path(args.data_dir).resolve()
+        if args.data_dir
+        else (artifact_root / args.tenant_id).resolve()
+    )
+    if not calls_dir.is_dir():
+        raise FileNotFoundError(f"Calls directory does not exist: {calls_dir}")
     call_folders = sorted(
         [d for d in calls_dir.iterdir() if d.is_dir() and d.name.startswith("call_")],
         key=lambda d: d.name,

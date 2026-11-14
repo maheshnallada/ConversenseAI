@@ -86,9 +86,13 @@ def main():
     print(f"    - Output Tokens: {summary.total_output_tokens}")
     print(f"    - Total Tokens: {summary.total_input_tokens + summary.total_output_tokens}")
     if summary.total_cost is None:
-        print(f"  Total Estimated Cost: unavailable ({summary.currency})")
+        currency_note = summary.currency or "no single currency"
+        print(f"  Total Estimated Cost: unavailable ({currency_note})")
     else:
-        print(f"  Total Estimated Cost: ${summary.total_cost:.4f} {summary.currency}")
+        amount = f"${summary.total_cost:.4f}" if summary.currency == "USD" else f"{summary.total_cost:.4f}"
+        print(f"  Total Estimated Cost: {amount} {summary.currency}")
+    for currency, amount in summary.cost_by_currency.items():
+        print(f"    - {currency}: {amount:.4f}")
     print("All metrics successfully stored in table 'observability_metrics'.")
 
 

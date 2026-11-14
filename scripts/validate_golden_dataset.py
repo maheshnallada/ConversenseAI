@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -126,7 +127,7 @@ def main():
     parser.add_argument(
         "--tenant-id",
         type=str,
-        default="health_campaign",
+        default=os.getenv("TENANT_ID", "health_campaign"),
         help="Tenant ID for calls",
     )
     parser.add_argument(

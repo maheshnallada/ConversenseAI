@@ -1,4 +1,7 @@
+import json
+
 import pytest
+from pydantic import BaseModel
 from app.domain.envelope import InteractionEnvelope
 from app.domain.timeline import ReconstructedTimeline, TimelineEvent
 from app.domain.transcript import TranscriptTurn
@@ -28,6 +31,44 @@ def test_outcome_evaluator_not_interested():
     assert res.details["correct_outcome"] == "Not interested"
     assert len(res.evidence) > 0
     assert any(e.line_index == 2 for e in res.evidence)
+
+
+def test_configured_llm_uses_structured_outcome_prompt_and_response_model():
+    class FakeLLM:
+        is_live_configured = True
+
+        def __init__(self):
+            self.messages = None
+            self.response_format = None
+
+        def chat_completion(self, messages, response_format=None):
+            self.messages = messages
+            self.response_format = response_format
+            data = {
+                "outcome": "Not interested",
+                "evidence_line": 2,
+                "quote": "I am not interested.",
+                "reason": "The customer explicitly declines.",
+            }
+            return response_format(**data) if response_format else json.dumps(data)
+
+    client = FakeLLM()
+    evaluator = OutcomeEvaluator(llm_client=client)
+    turns = [
+        TranscriptTurn("t1", "c_llm", "ten1", 1, "agent", "Would you like to hear more?", "would you like to hear more?"),
+        TranscriptTurn("t2", "c_llm", "ten1", 2, "customer", "I am not interested.", "i am not interested."),
+    ]
+
+    result = evaluator.evaluate(_envelope("c_llm"), turns)
+
+    assert result.method == "llm"
+    assert result.label == "Not interested"
+    assert result.evidence[0].line_index == 2
+    assert client.response_format is not None
+    assert isinstance(client.response_format, type)
+    assert issubclass(client.response_format, BaseModel)
+    assert client.messages[0]["role"] == "system"
+    assert "Prioritize the customer's explicit statements and decisions." in client.messages[0]["content"]
 
 def test_outcome_evaluator_do_not_call():
     evaluator = OutcomeEvaluator()
@@ -83,6 +124,16 @@ def test_outcome_evaluator_call_screening_or_machine(message):
     result = evaluator.evaluate(_envelope("c5"), turns)
 
     assert result.label == "Call screener or machine"
+
+
+def test_machine_only_call_is_not_classified_as_no_agent_audio():
+    message = "This is an automated recording."
+    turn = TranscriptTurn("t1", "c_machine", "ten1", 1, "customer", message, message.lower())
+
+    result = OutcomeEvaluator().evaluate(_envelope("c_machine"), [turn])
+
+    assert result.details["what_happened"] == "Machine or call screener answered"
+    assert result.details["correct_outcome"] == "Call screener or machine"
 
 
 def test_generic_insurance_confirmation_is_not_an_expert_booking():

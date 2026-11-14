@@ -56,6 +56,7 @@ def test_import_calls_uses_environment_defaults(monkeypatch, tmp_path):
 
     monkeypatch.setenv("TENANT_ID", "tenant_from_env")
     artifact_root = tmp_path / "artifacts"
+    (artifact_root / "tenant_from_env").mkdir(parents=True)
     monkeypatch.setenv("ARTIFACT_STORAGE_PATH", str(artifact_root))
     monkeypatch.setattr(import_calls, "create_session_factory", lambda db_url: object())
     monkeypatch.setattr(import_calls, "init_db", lambda factory: None)
@@ -68,6 +69,9 @@ def test_import_calls_uses_environment_defaults(monkeypatch, tmp_path):
 
     assert captured["tenant_id"] == "tenant_from_env"
     assert captured["artifact_dir"] == artifact_root.resolve()
+    assert Path(captured["data_dir"]).resolve() == (
+        artifact_root / "tenant_from_env"
+    ).resolve()
 
 
 def test_evaluate_calls_uses_call_id_and_environment_tenant_for_custom_directory(
@@ -103,6 +107,48 @@ def test_evaluate_calls_uses_call_id_and_environment_tenant_for_custom_directory
     assert captured == [("tenant_from_env", "canonical-call-id")]
 
 
+def test_evaluate_calls_continues_after_a_folder_failure(
+    monkeypatch, tmp_path, capsys
+):
+    for folder_name, call_id in (
+        ("call_01", "broken-call-id"),
+        ("call_02", "working-call-id"),
+    ):
+        folder = tmp_path / folder_name
+        folder.mkdir()
+        (folder / "call.json").write_text(
+            json.dumps({"call_id": call_id}), encoding="utf-8"
+        )
+    captured = []
+
+    class FakeService:
+        def __init__(self, session_factory):
+            pass
+
+        def evaluate_interaction(self, tenant_id, interaction_id):
+            captured.append(interaction_id)
+            if interaction_id == "broken-call-id":
+                raise RuntimeError("evaluation failed")
+            return []
+
+    monkeypatch.setattr(evaluate_calls, "create_session_factory", lambda db_url: object())
+    monkeypatch.setattr(evaluate_calls, "init_db", lambda factory: None)
+    monkeypatch.setattr(evaluate_calls, "EvaluationService", FakeService)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["evaluate_calls.py", "--data-dir", str(tmp_path)],
+    )
+
+    evaluate_calls.main()
+
+    output = capsys.readouterr().out
+    assert captured == ["broken-call-id", "working-call-id"]
+    assert "Total Calls Evaluated: 1" in output
+    assert "Failed Calls: 1" in output
+    assert "call_01: evaluation failed" in output
+
+
 def test_calculate_metrics_uses_artifact_tenant_default(monkeypatch, tmp_path, capsys):
     artifact_root = tmp_path / "artifacts"
     call_folder = artifact_root / "tenant_from_env" / "call_01"
@@ -124,6 +170,7 @@ def test_calculate_metrics_uses_artifact_tenant_default(monkeypatch, tmp_path, c
         total_output_tokens=0,
         total_cost=None,
         currency="MIXED",
+        cost_by_currency={"USD": 0.01, "EUR": 0.02},
     )
 
     class FakeService:
@@ -181,8 +228,9 @@ def test_process_transcripts_uses_environment_tenant(monkeypatch, tmp_path):
 
 
 def test_reconstruct_calls_uses_environment_tenant(monkeypatch, tmp_path):
-    call_folder = tmp_path / "call_01"
-    call_folder.mkdir()
+    artifact_root = tmp_path / "artifacts"
+    call_folder = artifact_root / "tenant_from_env" / "call_01"
+    call_folder.mkdir(parents=True)
     (call_folder / "call.json").write_text(
         json.dumps({"call_id": "canonical-call-id"}), encoding="utf-8"
     )
@@ -190,7 +238,7 @@ def test_reconstruct_calls_uses_environment_tenant(monkeypatch, tmp_path):
 
     class FakeProcessor:
         def process_folder(self, folder, tenant_id):
-            captured.append(tenant_id)
+            captured.append((Path(folder).resolve(), tenant_id))
             return []
 
     class FakeReconstructor:
@@ -209,6 +257,7 @@ def test_reconstruct_calls_uses_environment_tenant(monkeypatch, tmp_path):
             pass
 
     monkeypatch.setenv("TENANT_ID", "tenant_from_env")
+    monkeypatch.setenv("ARTIFACT_STORAGE_PATH", str(artifact_root))
     monkeypatch.setattr(reconstruct_calls, "create_session_factory", lambda db_url: object())
     monkeypatch.setattr(reconstruct_calls, "init_db", lambda factory: None)
     monkeypatch.setattr(reconstruct_calls, "TimelineRepository", FakeRepository)
@@ -219,12 +268,8 @@ def test_reconstruct_calls_uses_environment_tenant(monkeypatch, tmp_path):
         "validate_call_files",
         lambda folder: SimpleNamespace(agent_wav_count=0),
     )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["reconstruct_calls.py", "--data-dir", str(tmp_path)],
-    )
+    monkeypatch.setattr(sys, "argv", ["reconstruct_calls.py"])
 
     reconstruct_calls.main()
 
-    assert captured == ["tenant_from_env"]
+    assert captured == [(call_folder.resolve(), "tenant_from_env")]

@@ -4,5 +4,13 @@ __pycache__/
 .pytest_cache/
 *.sqlite3
 storage/artifacts/
-docs/
 data/
+.venv/
+frontend/node_modules/
+backend/storage/uploads/
+Calls_/
+.env
+__pycache__/
+.vscode/
+.idea/
+docs/

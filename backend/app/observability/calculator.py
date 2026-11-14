@@ -1,4 +1,5 @@
 import math
+from collections.abc import Mapping
 from typing import Any
 
 from app.domain.observability import InteractionMetrics, PercentilesResult
@@ -63,15 +64,21 @@ def calculate_interaction_metrics(
 ) -> InteractionMetrics:
     rc = rate_card or RateCardManager()
 
-    meta = call_data.get("meta") or {}
-    usage = meta.get("usage") or {}
-    line = usage.get("line") or {}
+    usage_data = call_data.get("usage")
+    if not isinstance(usage_data, Mapping):
+        meta = call_data.get("meta")
+        usage_data = meta.get("usage") if isinstance(meta, Mapping) else None
+    usage = usage_data if isinstance(usage_data, Mapping) else {}
+    line_data = usage.get("line")
+    line = line_data if isinstance(line_data, Mapping) else {}
     telephony_duration = line.get("connected_s")
     if telephony_duration is not None:
         telephony_duration = round(float(telephony_duration), 3)
 
-    models = call_data.get("models") or {}
-    llm_usage = usage.get("llm") or {}
+    models_data = call_data.get("models")
+    models = models_data if isinstance(models_data, Mapping) else {}
+    llm_data = usage.get("llm")
+    llm_usage = llm_data if isinstance(llm_data, Mapping) else {}
 
     agent_turns = [t for t in turns if t.speaker == "agent"]
     customer_turns = [t for t in turns if t.speaker == "customer"]
@@ -119,8 +126,10 @@ def calculate_interaction_metrics(
         tot_tokens = (in_tokens or 0) + (out_tokens or 0)
 
     # STT and TTS duration
-    stt_usage = usage.get("stt") or {}
-    tts_usage = usage.get("tts") or {}
+    stt_data = usage.get("stt")
+    stt_usage = stt_data if isinstance(stt_data, Mapping) else {}
+    tts_data = usage.get("tts")
+    tts_usage = tts_data if isinstance(tts_data, Mapping) else {}
     stt_audio_s = stt_usage.get("audio_s")
     tts_audio_s = tts_usage.get("audio_s")
     tts_model = tts_usage.get("model") or "bulbul:v3"

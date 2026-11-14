@@ -75,7 +75,14 @@ class FactsExtractionEvaluator(BaseEvaluator):
     def _extract_policy(self, customer_turns: List[TranscriptTurn]):
         for ct in customer_turns:
             text = (ct.normalized_text or ct.raw_text).lower()
-            if "no policy" in text or "don't have" in text or "none" in text:
+            explicit_negation = any(
+                re.search(pattern, text)
+                for pattern in (
+                    r"\bno\s+(?:(?:company|corporate|employer|health|medical)\s+){0,2}(?:policy|insurance|cover)\b",
+                    r"\b(?:don't|do not|doesn't|does not)\s+have\b.{0,30}\b(?:policy|insurance|cover)\b",
+                )
+            )
+            if explicit_negation or "no policy" in text or "don't have" in text or "none" in text:
                 return "None", [EvidenceItem(
                     source_type="transcript_turn",
                     reference_id=ct.turn_id,

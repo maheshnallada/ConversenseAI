@@ -44,14 +44,8 @@ class RateCardManager:
         self.currency = self.config_data.get("currency", "USD")
         self.rates = self.config_data.get("rates", {})
 
-    def _load(self) -> dict[str, Any]:
-        if self.config_path.exists():
-            try:
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        # Fallback default rates
+    @staticmethod
+    def _fallback_config() -> dict[str, Any]:
         return {
             "currency": "USD",
             "rates": {
@@ -64,6 +58,23 @@ class RateCardManager:
                 "telephony": {"phone": {"per_minute": 0.01}},
             },
         }
+
+    def _load(self) -> dict[str, Any]:
+        if self.config_path.exists():
+            try:
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                rates = config.get("rates") if isinstance(config, dict) else None
+                valid_rates = isinstance(rates, dict) and all(
+                    isinstance(category_rates, dict)
+                    and all(isinstance(rate, dict) for rate in category_rates.values())
+                    for category_rates in rates.values()
+                )
+                if valid_rates:
+                    return config
+            except Exception:
+                pass
+        return self._fallback_config()
 
     def calculate_llm_cost(
         self,

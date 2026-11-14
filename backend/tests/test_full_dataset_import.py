@@ -9,7 +9,7 @@ from app.storage.db import create_session_factory, init_db
 from app.storage.orm import ArtifactRow, ImportRunRow, InteractionRow, OutboxRow
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CALLS_DIR = PROJECT_ROOT / "data" / "calls"
+CALLS_DIR = PROJECT_ROOT / "backend" / "storage" / "artifacts" / "health_campaign"
 
 
 def test_full_50_calls_dataset_import(tmp_path: Path):

@@ -5,7 +5,7 @@ from app.ingestion.mapper import map_call_folder
 from app.storage.artifacts import LocalArtifactStore
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CALLS_DIR = PROJECT_ROOT / "data" / "calls"
+CALLS_DIR = PROJECT_ROOT / "backend" / "storage" / "artifacts" / "health_campaign"
 
 
 def test_map_call_01_standard_call(tmp_path: Path):

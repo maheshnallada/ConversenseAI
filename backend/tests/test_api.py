@@ -85,13 +85,33 @@ def test_missing_tenant_header_is_rejected():
     [
         ("POST", "/api/v1/interactions", _body()),
         ("GET", "/api/v1/interactions/interaction_001", None),
+        ("GET", "/api/v1/interactions-list", None),
+        ("GET", "/api/v1/interactions", None),
+        ("GET", "/api/v1/interactions/interaction_001/timeline", None),
+        ("GET", "/api/v1/interactions/interaction_001/audio", None),
         ("POST", "/api/v1/interactions/interaction_001/evaluate", None),
         ("GET", "/api/v1/interactions/interaction_001/evaluations", None),
+        (
+            "POST",
+            "/api/v1/interactions/interaction_001/reviews",
+            {
+                "evaluator_id": "outcome.intent",
+                "reviewed_label": "Interested",
+                "reviewer_name": "Reviewer",
+            },
+        ),
+        ("GET", "/api/v1/interactions/interaction_001/reviews", None),
+        ("GET", "/api/v1/analytics/overview", None),
+        ("GET", "/api/v1/analytics/quality", None),
+        ("GET", "/api/v1/analytics/cost", None),
         (
             "POST",
             "/api/v1/interactions/process-and-evaluate",
             {"call_folder_path": "missing-call-folder"},
         ),
+        ("POST", "/api/v1/interactions/upload-zip", None),
+        ("POST", "/api/v1/interactions/upload-files", {"call_json": "{}"}),
+        ("POST", "/api/v1/interactions/seed-all", None),
     ],
 )
 @pytest.mark.parametrize("tenant_header", [None, ""])

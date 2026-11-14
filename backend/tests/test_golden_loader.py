@@ -1,10 +1,26 @@
 from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 from app.validation.golden_loader import load_golden_dataset, load_reply_wait_checks
 
-def test_golden_dataset_csv_validation():
-    root = Path(__file__).resolve().parent.parent.parent
-    csv_path = root / "data" / "golden_dataset.csv"
+
+GENERATOR = Path(__file__).resolve().parents[2] / "scripts" / "generate_golden_dataset.py"
+
+
+def _generate_dataset(output_dir: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(GENERATOR), "--output-dir", str(output_dir)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_golden_dataset_csv_validation(tmp_path: Path):
+    _generate_dataset(tmp_path)
+    csv_path = tmp_path / "golden_dataset.csv"
 
     labels = load_golden_dataset(csv_path)
 
@@ -47,10 +63,9 @@ def test_golden_dataset_csv_validation():
         assert l.emotion in allowed_emotion, f"{l.call_id}: invalid emotion '{l.emotion}'"
         assert l.overall in allowed_overall, f"{l.call_id}: invalid overall '{l.overall}'"
 
-def test_reply_wait_checks_validation():
-    root = Path(__file__).resolve().parent.parent.parent
-    csv_path = root / "data" / "reply_wait_check_20_calls.csv"
-
+def test_reply_wait_checks_validation(tmp_path: Path):
+    _generate_dataset(tmp_path)
+    csv_path = tmp_path / "reply_wait_check_20_calls.csv"
     checks = load_reply_wait_checks(csv_path)
 
     # Exactly 20 calls per spec

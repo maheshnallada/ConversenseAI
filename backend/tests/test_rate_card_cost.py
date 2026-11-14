@@ -80,3 +80,22 @@ def test_rate_card_total_breakdown():
     assert breakdown.tts_cost is not None
     assert breakdown.telephony_cost is not None
 
+
+@pytest.mark.parametrize(
+    "invalid_data",
+    [
+        [],
+        {"rates": []},
+        {"rates": {"llm": []}},
+    ],
+)
+def test_invalid_rate_card_shapes_use_fallback(tmp_path, invalid_data):
+    import json
+
+    config_path = tmp_path / "invalid-rates.json"
+    config_path.write_text(json.dumps(invalid_data), encoding="utf-8")
+
+    manager = RateCardManager(config_path)
+
+    assert manager.rates["llm"]["gemini-3.5-flash-lite"]["input_per_1m"] == 0.30
+

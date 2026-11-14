@@ -52,5 +52,6 @@ class PlatformObservabilitySummary:
     total_input_tokens: int
     total_output_tokens: int
     total_cost: float | None
-    currency: str = "USD"
+    currency: str | None = None
+    cost_by_currency: dict[str, float] = field(default_factory=dict)
 

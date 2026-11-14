@@ -4,7 +4,7 @@ import pytest
 from app.reconstruction.processor import TranscriptProcessor
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CALLS_DIR = PROJECT_ROOT / "data" / "calls"
+CALLS_DIR = PROJECT_ROOT / "backend" / "storage" / "artifacts" / "health_campaign"
 
 
 def _call_dir(call_id: str) -> Path:
