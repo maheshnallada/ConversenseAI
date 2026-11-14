@@ -123,8 +123,7 @@ class InteractionTimelineRow(Base):
     first_conversational_failure_time_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     timeline_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-
+ 
 class ObservabilityMetricsRow(Base):
     __tablename__ = "observability_metrics"
     __table_args__ = (
@@ -190,7 +189,7 @@ class EvaluationResultRow(Base):
     details_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
-
+ 
 class ImportRunRow(Base):
     __tablename__ = "import_runs"
 
