@@ -1,5 +1,6 @@
 import os
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urlparse
 
@@ -13,6 +14,14 @@ from app.evaluation.errors import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StructuredCompletion:
+    result: BaseModel
+    raw_output: str | None
+    input_tokens: int | None
+    output_tokens: int | None
 
 
 def _client_configuration() -> tuple[str, str, str, str, float, dict[str, str]]:
@@ -33,6 +42,14 @@ async def complete_structured(
     messages: Sequence[dict[str, str]],
     response_model: type[BaseModel],
 ) -> BaseModel:
+    completion = await complete_structured_with_usage(messages, response_model)
+    return completion.result
+
+
+async def complete_structured_with_usage(
+    messages: Sequence[dict[str, str]],
+    response_model: type[BaseModel],
+) -> StructuredCompletion:
     base_url, api_key, model, provider, timeout_seconds, headers = (
         _client_configuration()
     )
@@ -61,6 +78,13 @@ async def complete_structured(
             f"Structured request failed ({type(error).__name__})",
             model=model,
             provider=provider,
+            retryable=type(error).__name__
+            in {
+                "APITimeoutError",
+                "APIConnectionError",
+                "RateLimitError",
+                "InternalServerError",
+            },
         ) from None
     except ValidationError:
         raise LLMResponseError(
@@ -104,7 +128,17 @@ async def complete_structured(
             model=model,
             provider=provider,
         ) from None
-    return result
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+    output_tokens = getattr(usage, "completion_tokens", None) if usage else None
+    content = getattr(message, "content", None)
+    raw_output = content if isinstance(content, str) else None
+    return StructuredCompletion(
+        result=result,
+        raw_output=raw_output,
+        input_tokens=input_tokens if type(input_tokens) is int else None,
+        output_tokens=output_tokens if type(output_tokens) is int else None,
+    )
 
 
 class LLMClient:

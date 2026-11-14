@@ -169,7 +169,14 @@ def test_upload_files_json_endpoint(app_and_factory):
         res = route.endpoint(body=req, tenant_id=test_tenant)
         assert res["success"] is True
         assert "test_call_uploaded_001" in str(res)
-        assert res["report"]["evaluations_count"] >= 4
+        assert res["report"]["evaluations_count"] == 3
+        assert {
+            batch["batch_name"] for batch in res["report"]["evaluations"]
+        } == {
+            "conversation_understanding",
+            "conversation_quality",
+            "compliance_appointment",
+        }
     finally:
         with factory() as session:
             from sqlalchemy import text

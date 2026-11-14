@@ -238,6 +238,7 @@ def test_async_provider_errors_are_typed_and_redacted(monkeypatch, provider_erro
 
     assert error.value.model == "openai/gpt-oss-120b"
     assert error.value.provider == "groq"
+    assert error.value.retryable is True
     assert "gateway-secret" not in str(error.value)
 
 

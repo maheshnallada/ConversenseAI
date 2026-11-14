@@ -1,3 +1,7 @@
+import asyncio
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
@@ -7,6 +11,134 @@ from app.evaluation.schemas import (
     ConversationQualityResult,
     ConversationUnderstandingResult,
 )
+from app.domain.envelope import InteractionEnvelope
+from app.domain.transcript import TranscriptTurn
+from app.evaluation.errors import LLMRequestError
+from app.evaluation.registry import EvaluatorRegistry
+
+
+def _batch_payload(response_model):
+    if response_model is ConversationUnderstandingResult:
+        return {
+            "outcome": {
+                "label": "Not interested",
+                "evidence_line": 1,
+                "quote": "Not interested.",
+                "reason": "The customer declined.",
+            },
+            "customer_facts": [],
+            "sentiment": {
+                "label": "Neutral",
+                "evidence_line": 1,
+                "quote": "Not interested.",
+                "reason": "No attitude beyond a decline is established.",
+            },
+            "emotion": {
+                "label": "Neutral",
+                "evidence_line": 1,
+                "quote": "Not interested.",
+                "reason": "No distinct emotion is established.",
+            },
+        }
+    if response_model is ConversationQualityResult:
+        return {
+            "conversation_quality": {
+                "dimensions": {
+                    name: {
+                        "score": 4,
+                        "evidence_line": 1,
+                        "quote": "Not interested.",
+                        "reason": "A concise interaction.",
+                    }
+                    for name in (
+                        "clarity",
+                        "relevance",
+                        "empathy",
+                        "professionalism",
+                        "naturalness",
+                        "responsiveness",
+                        "closing_quality",
+                    )
+                },
+                "strengths": [],
+                "improvement_areas": [],
+            },
+            "context_awareness": {
+                "issues": [],
+                "dimensions": {
+                    "repeated_questions": False,
+                    "ignored_information": False,
+                    "contradictory_responses": False,
+                    "irrelevant_followups": False,
+                    "poor_objection_handling": False,
+                },
+                "score": 4,
+                "first_context_failure_line": None,
+            },
+            "conversation_completeness": {
+                "stages": {
+                    name: {"status": "unknown", "evidence_line": None}
+                    for name in (
+                        "opening",
+                        "customer_engagement",
+                        "purpose_explanation",
+                        "information_collection",
+                        "outcome_establishment",
+                        "closing",
+                    )
+                },
+                "conversation_status": "UNKNOWN",
+                "customer_abandoned": None,
+                "reason": "Not enough data.",
+            },
+        }
+    return {
+        "compliance": {
+            "rule_results": {
+                f"NR00{i}": {
+                    "status": "NOT_DETECTED",
+                    "evidence_line": None,
+                    "quote": "",
+                    "reason": "",
+                }
+                for i in range(1, 7)
+            },
+            "potential_violations": [],
+        },
+        "appointment_interpretation": {
+            "appointment_type": "NONE",
+            "consent_status": "NOT_PRESENT",
+            "consent_evidence_line": None,
+            "consent_quote": "",
+            "agent_proposal_line": None,
+            "agent_proposal_quote": "",
+            "date_text": None,
+            "time_text": None,
+            "interpreted_date": None,
+            "interpreted_time": None,
+            "interpretation_reason": "No appointment discussed.",
+        },
+    }
+
+
+def _batch_interaction():
+    return InteractionEnvelope(
+        tenant_id="tenant-1",
+        interaction_id="interaction-1",
+        schema_version="1.0",
+    )
+
+
+def _batch_turn():
+    return TranscriptTurn(
+        turn_id="turn-1",
+        interaction_id="interaction-1",
+        tenant_id="tenant-1",
+        turn_index=1,
+        speaker="customer",
+        raw_text="Not interested.",
+        normalized_text="Not interested.",
+    )
 
 
 def test_conversation_understanding_accepts_only_design_labels():
@@ -486,3 +618,142 @@ def test_batch_prompts_include_shared_multilingual_rules_once():
         assert prompt.count("MULTILINGUAL RULES:") == 1
         assert "Never translate, normalize, transliterate or correct evidence quotes." in prompt
         assert "Return only the requested JSON structure." in prompt
+
+
+def test_registry_runs_three_batches_concurrently_and_preserves_partial_failure(
+    monkeypatch,
+):
+    from app.evaluation.registry import EvaluatorRegistry
+
+    active = 0
+    max_active = 0
+    calls = []
+
+    async def structured_caller(messages, response_model):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        calls.append(response_model)
+        try:
+            await asyncio.sleep(0.01)
+            if response_model is ConversationQualityResult:
+                raise LLMRequestError(
+                    "provider unavailable",
+                    model="test-model",
+                    provider="test-provider",
+                )
+            return response_model.model_validate(_batch_payload(response_model))
+        finally:
+            active -= 1
+
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    registry = EvaluatorRegistry(structured_caller=structured_caller)
+
+    run = asyncio.run(
+        registry.evaluate_batches(
+            _batch_interaction(),
+            [_batch_turn()],
+        )
+    )
+
+    assert len(calls) == 3
+    assert max_active == 3
+    assert {batch.batch_name for batch in run.batches} == {
+        "conversation_understanding",
+        "conversation_quality",
+        "compliance_appointment",
+    }
+    assert sum(batch.status == "completed" for batch in run.batches) == 2
+    failed = next(
+        batch for batch in run.batches if batch.batch_name == "conversation_quality"
+    )
+    assert failed.status == "failed"
+    assert failed.error_type == "LLMRequestError"
+
+
+def test_registry_can_run_only_selected_retry_batches():
+    calls = []
+
+    async def structured_caller(messages, response_model):
+        calls.append(response_model)
+        return response_model.model_validate(_batch_payload(response_model))
+
+    registry = EvaluatorRegistry(structured_caller=structured_caller)
+    run = asyncio.run(
+        registry.evaluate_batches(
+            _batch_interaction(),
+            [_batch_turn()],
+            batch_names={"conversation_quality"},
+        )
+    )
+
+    assert calls == [ConversationQualityResult]
+    assert [batch.batch_name for batch in run.batches] == ["conversation_quality"]
+
+
+def test_registry_retries_only_retryable_provider_failures():
+    attempts = 0
+
+    async def structured_caller(messages, response_model):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise LLMRequestError(
+                "temporary provider failure",
+                model="test-model",
+                provider="test-provider",
+                retryable=True,
+            )
+        return response_model.model_validate(_batch_payload(response_model))
+
+    registry = EvaluatorRegistry(structured_caller=structured_caller)
+    run = asyncio.run(
+        registry.evaluate_batches(
+            _batch_interaction(),
+            [_batch_turn()],
+            batch_names={"conversation_understanding"},
+        )
+    )
+
+    assert attempts == 2
+    assert run.batches[0].status == "completed"
+
+
+def test_registry_routes_invalid_evidence_for_review():
+    async def structured_caller(messages, response_model):
+        payload = _batch_payload(response_model)
+        if response_model is ConversationUnderstandingResult:
+            payload["sentiment"]["quote"] = "normalized text not in transcript"
+        return response_model.model_validate(payload)
+
+    registry = EvaluatorRegistry(structured_caller=structured_caller)
+    run = asyncio.run(
+        registry.evaluate_batches(
+            _batch_interaction(),
+            [_batch_turn()],
+            batch_names={"conversation_understanding"},
+        )
+    )
+
+    batch = run.batches[0]
+    assert batch.status == "review_required"
+    assert batch.review_required is True
+    assert batch.validation["evidence_valid"] is False
+
+
+def test_invalid_evidence_is_not_used_for_the_derived_assessment():
+    async def structured_caller(messages, response_model):
+        payload = _batch_payload(response_model)
+        if response_model is ConversationUnderstandingResult:
+            payload["sentiment"]["quote"] = "normalized text not in transcript"
+        return response_model.model_validate(payload)
+
+    registry = EvaluatorRegistry(structured_caller=structured_caller)
+    run = asyncio.run(
+        registry.evaluate_batches(
+            _batch_interaction(),
+            [_batch_turn()],
+        )
+    )
+
+    assert run.summary["overall_assessment"] == "Can't tell"

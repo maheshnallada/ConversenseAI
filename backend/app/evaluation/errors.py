@@ -10,7 +10,16 @@ class LLMConfigurationError(LLMError):
 
 
 class LLMRequestError(LLMError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        model: str,
+        provider: str,
+        retryable: bool = False,
+    ):
+        self.retryable = retryable
+        super().__init__(message, model=model, provider=provider)
 
 
 class LLMResponseError(LLMError):

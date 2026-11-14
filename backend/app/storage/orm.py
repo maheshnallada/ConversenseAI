@@ -191,6 +191,62 @@ class EvaluationResultRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class EvaluationRunRow(Base):
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    summary_json: Mapped[str] = mapped_column(Text)
+    review_required: Mapped[bool] = mapped_column(Boolean)
+    review_reasons_json: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class EvaluationBatchRow(Base):
+    __tablename__ = "evaluation_batches"
+    __table_args__ = (
+        UniqueConstraint("evaluation_id", name="uq_evaluation_batch_id"),
+        UniqueConstraint(
+            "run_id",
+            "batch_name",
+            name="uq_evaluation_run_batch",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(String(128), index=True)
+    run_id: Mapped[str] = mapped_column(String(128), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    batch_name: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    model: Mapped[str] = mapped_column(String(128))
+    prompt_version: Mapped[str] = mapped_column(String(32))
+    schema_version: Mapped[str] = mapped_column(String(32))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parsed_output_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_json: Mapped[str] = mapped_column(Text)
+    review_required: Mapped[bool] = mapped_column(Boolean)
+    review_status: Mapped[str] = mapped_column(String(32))
+    review_reasons_json: Mapped[str] = mapped_column(Text)
+    source_evaluation_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    error_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ImportRunRow(Base):
     __tablename__ = "import_runs"
 

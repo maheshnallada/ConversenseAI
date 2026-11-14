@@ -1,15 +1,24 @@
+import asyncio
+import copy
 import json
 import logging
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.domain.envelope import InteractionEnvelope
-from app.domain.evaluation import EvaluationResult
+from app.domain.evaluation import EvaluationBatchRecord, EvaluationResult, EvaluationRun
+from app.evaluation.derivation import (
+    AppointmentValidation,
+    derive_appointment_validity,
+    derive_evaluation_summary,
+)
 from app.evaluation.registry import EvaluatorRegistry
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.transcript_repo import TranscriptRepository
@@ -138,35 +147,176 @@ class EvaluationService:
 
         raise FileNotFoundError(f"Call folder not found: '{call_folder_path}'")
 
-    def evaluate_interaction(self, tenant_id: str, interaction_id: str) -> List[EvaluationResult]:
+    def evaluate_interaction(
+        self,
+        tenant_id: str,
+        interaction_id: str,
+        retry_from_run_id: str | None = None,
+    ) -> EvaluationRun:
         """
-        Loads an existing interaction and its context, runs all evaluators,
-        persists the results, and returns them.
+        Loads an existing interaction and its context, runs the evaluation batches,
+        persists the versioned run, and returns it.
         """
         resolved_id = self.resolve_interaction_id(tenant_id, interaction_id)
 
-        # 1. Load interaction envelope
         envelope = self._load_envelope(tenant_id, resolved_id)
         if not envelope:
             raise ValueError(f"Interaction {tenant_id}:{resolved_id} not found in database.")
 
-        # 2. Load turns
         turns = self.transcript_repo.get_turns(tenant_id, resolved_id)
-
-        # 3. Load timeline
         timeline = self.timeline_repo.get_timeline(tenant_id, resolved_id)
+        previous_run = None
+        retry_batches: set[str] | None = None
+        if retry_from_run_id is not None:
+            previous_run = self.eval_repo.get_run(
+                tenant_id,
+                resolved_id,
+                retry_from_run_id,
+            )
+            if previous_run is None:
+                raise ValueError(
+                    f"Evaluation run {retry_from_run_id} was not found for "
+                    f"{tenant_id}:{resolved_id}."
+                )
+            retry_batches = {
+                batch.batch_name
+                for batch in previous_run.batches
+                if batch.status == "failed"
+            }
 
-        # 4. Run evaluators
-        results = self.registry.evaluate_all(
-            interaction=envelope,
-            turns=turns,
-            timeline=timeline,
+        evaluated_run = asyncio.run(
+            self.registry.evaluate_batches(
+                interaction=envelope,
+                turns=turns,
+                timeline=timeline,
+                batch_names=retry_batches,
+            )
         )
+        if previous_run is not None:
+            evaluated_names = {batch.batch_name for batch in evaluated_run.batches}
+            carried_forward = [
+                replace(
+                    copy.deepcopy(batch),
+                    evaluation_id=str(uuid4()),
+                    source_evaluation_id=batch.evaluation_id,
+                )
+                for batch in previous_run.batches
+                if batch.batch_name not in evaluated_names and batch.status != "failed"
+            ]
+            evaluated_run.batches = carried_forward + evaluated_run.batches
 
-        # 5. Persist results
-        self.eval_repo.save_many(results)
+        appointment_validation = self._derive_appointment_validation(
+            envelope,
+            evaluated_run.batches,
+        )
+        available_results = {
+            batch.batch_name: batch.parsed_output
+            for batch in evaluated_run.batches
+            if batch.status == "completed" and batch.parsed_output is not None
+        }
+        summary = derive_evaluation_summary(
+            available_results,
+            timeline,
+            appointment_validation,
+        )
+        evaluated_run.summary = {
+            "overall_assessment": summary.overall_assessment,
+            "dimension_assessments": summary.dimension_assessments,
+            "first_failure": {
+                "status": summary.first_failure.status,
+                "first_failure": (
+                    summary.first_failure.first_failure.__dict__
+                    if summary.first_failure.first_failure
+                    else None
+                ),
+                "critical_failures": [
+                    failure.__dict__
+                    for failure in summary.first_failure.critical_failures
+                ],
+            },
+            "critical_issues": summary.critical_issues,
+            "requires_human_review": summary.requires_human_review,
+            "review_reasons": summary.review_reasons,
+            "appointment_validation": (
+                appointment_validation.__dict__ if appointment_validation else None
+            ),
+        }
+        evaluated_run.review_reasons = list(dict.fromkeys(
+            [
+                *evaluated_run.review_reasons,
+                *summary.review_reasons,
+                *(
+                    [appointment_validation.reason]
+                    if appointment_validation
+                    and appointment_validation.status == "NOT_EVALUABLE"
+                    else []
+                ),
+            ]
+        ))
+        evaluated_run.review_required = (
+            evaluated_run.review_required
+            or summary.requires_human_review
+            or any(batch.review_required for batch in evaluated_run.batches)
+        )
+        self.eval_repo.save_run(evaluated_run)
+        return evaluated_run
 
-        return results
+    def _derive_appointment_validation(
+        self,
+        envelope: InteractionEnvelope,
+        batches: list[EvaluationBatchRecord],
+    ) -> AppointmentValidation | None:
+        compliance_batch = next(
+            (
+                batch
+                for batch in batches
+                if batch.batch_name == "compliance_appointment"
+                and batch.parsed_output is not None
+            ),
+            None,
+        )
+        if compliance_batch is None:
+            return None
+
+        from app.evaluation.schemas import ComplianceAppointmentResult
+
+        result = ComplianceAppointmentResult.model_validate(
+            compliance_batch.parsed_output
+        )
+        domain_data = envelope.domain_data or {}
+        meta = domain_data.get("meta") if isinstance(domain_data, dict) else {}
+        meta = meta if isinstance(meta, dict) else {}
+        timezone_name = (
+            domain_data.get("timezone")
+            if isinstance(domain_data, dict)
+            else None
+        ) or meta.get("timezone")
+        booking_event = next(
+            (
+                event.model_dump(mode="python")
+                for event in envelope.events or []
+                if event.event_type in {"appointment.booked", "booking.confirmed"}
+            ),
+            None,
+        )
+        rules_path = (
+            Path(__file__).resolve().parent.parent.parent.parent
+            / "configs"
+            / "evaluators"
+            / "health_insurance_rules.json"
+        )
+        with rules_path.open("r", encoding="utf-8") as file:
+            config = json.load(file)
+        never_rules = config.get("never_rules")
+        if not isinstance(never_rules, dict):
+            raise ValueError("Health-insurance appointment policy is unavailable.")
+        return derive_appointment_validity(
+            result.appointment_interpretation,
+            booking_event,
+            envelope.started_at,
+            timezone_name,
+            never_rules,
+        )
 
     def process_and_evaluate_folder(
         self,
@@ -277,7 +427,7 @@ class EvaluationService:
         )
 
         # Step 5: Evaluation
-        evaluations = self.evaluate_interaction(tenant_id, interaction_id)
+        evaluation_run = self.evaluate_interaction(tenant_id, interaction_id)
 
         return {
             "tenant_id": tenant_id,
@@ -286,18 +436,18 @@ class EvaluationService:
             "turns_count": len(turns),
             "timeline_reconstructed": True,
             "metrics_calculated": True,
-            "evaluations_count": len(evaluations),
+            "evaluation_run_id": evaluation_run.run_id,
+            "evaluations_count": len(evaluation_run.batches),
             "evaluations": [
                 {
-                    "family": e.family,
-                    "evaluator_id": e.evaluator_id,
-                    "label": e.label,
-                    "score": e.score,
-                    "review_status": e.review_status,
-                    "reason": e.reason,
-                    "details": e.details,
+                    "evaluation_id": batch.evaluation_id,
+                    "batch_name": batch.batch_name,
+                    "status": batch.status,
+                    "result": batch.parsed_output,
+                    "review_status": batch.review_status,
+                    "review_reasons": batch.review_reasons,
                 }
-                for e in evaluations
+                for batch in evaluation_run.batches
             ],
         }
 
