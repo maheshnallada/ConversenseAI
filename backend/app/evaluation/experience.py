@@ -1,6 +1,5 @@
-import json
-import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional
+from pydantic import BaseModel
 from app.domain.envelope import InteractionEnvelope
 from app.domain.transcript import TranscriptTurn
 from app.domain.timeline import ReconstructedTimeline
@@ -8,10 +7,19 @@ from app.domain.evaluation import EvaluationResult, EvidenceItem
 from app.evaluation.base import BaseEvaluator
 from app.evaluation.llm_client import LLMClient
 
-logger = logging.getLogger(__name__)
-
 SENTIMENT_VALUES = ["Positive", "Neutral", "Negative", "Can't tell"]
 EMOTION_VALUES = ["Cooperative", "Confused", "Frustrated", "Disengaged", "Neutral", "Can't tell"]
+
+class SentimentEmotionLLMResponse(BaseModel):
+    sentiment: Literal["Positive", "Neutral", "Negative", "Can't tell"]
+    emotion: Literal["Cooperative", "Confused", "Frustrated", "Disengaged", "Neutral", "Can't tell"]
+    sentiment_evidence_line: Optional[int]
+    sentiment_quote: str
+    sentiment_reason: str
+    emotion_evidence_line: Optional[int]
+    emotion_quote: str
+    emotion_reason: str
+
 
 class CustomerExperienceEvaluator(BaseEvaluator):
     evaluator_id = "experience.sentiment_emotion"
@@ -64,44 +72,179 @@ class CustomerExperienceEvaluator(BaseEvaluator):
             },
         )
 
+    SENTIMENT_EMOTION_SYSTEM_PROMPT = """
+    You are an expert customer-experience evaluator specializing in
+    sentiment and emotion analysis of health-insurance voice calls.
+
+    Your task is to independently classify the customer's overall
+    sentiment and dominant emotional state using ONLY the customer's
+    statements in the supplied transcript.
+
+    Do not evaluate the agent's sentiment or emotion.
+
+    GENERAL EVALUATION PRINCIPLES:
+
+    1. Read all customer turns before assigning classifications.
+    2. Consider the complete customer interaction, not just the
+    first or last statement.
+    3. Use the meaning and conversational context of customer
+    statements rather than isolated keywords.
+    4. Distinguish sentiment from emotion.
+    5. Do not assume that declining an offer automatically means
+    negative sentiment.
+    6. Do not assume that agreeing automatically means positive sentiment.
+    7. Do not infer emotions from punctuation or words alone.
+    8. Do not invent emotional states that are not supported by
+    the customer's statements.
+    9. If there is insufficient evidence, return "Can't tell".
+
+    SENTIMENT CLASSIFICATION:
+
+    Use only these allowed values:
+
+    - Positive:
+    The customer expresses satisfaction, interest, appreciation,
+    willingness, or a clearly favorable attitude.
+
+    - Neutral:
+    The customer communicates factually or responds without
+    a clearly positive or negative attitude.
+
+    - Negative:
+    The customer expresses dissatisfaction, rejection,
+    annoyance, disapproval, or an unfavorable attitude.
+
+    - Can't tell:
+    There is insufficient customer language to reliably
+    determine sentiment.
+
+    EMOTION CLASSIFICATION:
+
+    Use only these allowed values:
+
+    - Cooperative:
+    The customer is willing to participate, answer questions,
+    provide relevant information, or engage constructively.
+
+    - Confused:
+    The customer appears uncertain, does not understand the
+    discussion, or repeatedly seeks clarification.
+
+    - Frustrated:
+    The customer expresses irritation, impatience, annoyance,
+    or dissatisfaction with the interaction.
+
+    - Disengaged:
+    The customer shows little interest in continuing,
+    gives minimal responses, or attempts to end the conversation.
+
+    - Neutral:
+    The customer shows no clearly identifiable emotional state.
+
+    - Can't tell:
+    There is insufficient evidence to identify the customer's emotion.
+
+    SENTIMENT AND EMOTION MUST BE INDEPENDENT:
+
+    Examples:
+
+    Customer: "Thank you, but I already have insurance."
+    Sentiment: Neutral
+    Emotion: Cooperative
+
+    Customer: "I don't understand why you keep asking me this."
+    Sentiment: Negative
+    Emotion: Confused or Frustrated, depending on context
+
+    Customer: "Please don't call me again."
+    Sentiment: Negative
+    Emotion: Disengaged
+
+    Customer: "Yes, please arrange the consultation."
+    Sentiment: Positive
+    Emotion: Cooperative
+
+    OVERALL CLASSIFICATION:
+
+    1. Consider the full sequence of customer turns.
+    2. Identify the dominant sentiment across the interaction.
+    3. Identify the dominant emotional state across the interaction.
+    4. Do not allow one isolated statement to dominate the
+    classification unless it is the only meaningful evidence.
+    5. When customer behavior changes during the call, consider
+    which state best represents the overall interaction.
+
+    EVIDENCE REQUIREMENTS:
+
+    For sentiment and emotion separately:
+
+    1. Select the most representative customer statement.
+    2. Return its exact transcript line number.
+    3. Copy the exact customer statement as the quote.
+    4. Explain why the statement supports the classification.
+    5. Never cite an agent line as customer evidence.
+    6. Never fabricate or paraphrase the evidence quote.
+    7. If evidence is insufficient, return null for the line number
+    and an empty string for the quote.
+
+    """
+
+
+    @staticmethod
+    def build_sentiment_emotion_prompt(transcript, sentiment_values, emotion_values):
+        return f"""
+    Evaluate the customer's sentiment and emotion.
+
+    ALLOWED SENTIMENT VALUES:
+    {', '.join(sentiment_values)}
+
+    ALLOWED EMOTION VALUES:
+    {', '.join(emotion_values)}
+
+    CUSTOMER TURNS:
+    {transcript}
+    """
+
+
     def _evaluate_with_llm(self, customer_turns: List[TranscriptTurn]):
         transcript = "\n".join(
             f"[Line {turn.turn_index}] {turn.raw_text}" for turn in customer_turns
         )
-        prompt = (
-            "Classify the customer's overall sentiment and emotion from these customer turns only.\n"
-            f"Allowed sentiment values: {', '.join(SENTIMENT_VALUES)}\n"
-            f"Allowed emotion values: {', '.join(EMOTION_VALUES)}\n"
-            "Return one JSON object with sentiment, emotion, sentiment_evidence_line, "
-            "sentiment_quote, sentiment_reason, emotion_evidence_line, emotion_quote, "
-            "and emotion_reason. Evidence line values must refer to the supplied line numbers; "
-            "quotes must be exact text from that customer turn.\n\n"
-            f"Customer turns:\n{transcript}"
+        response = self.llm_client.chat_completion(
+            [
+                {"role": "system", "content": self.SENTIMENT_EMOTION_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": self.build_sentiment_emotion_prompt(
+                        transcript,
+                        SENTIMENT_VALUES,
+                        EMOTION_VALUES,
+                    ),
+                },
+            ],
+            response_format=SentimentEmotionLLMResponse,
         )
-        response = self.llm_client.chat_completion([{"role": "user", "content": prompt}])
-        if not response:
+        if not isinstance(response, SentimentEmotionLLMResponse):
             return None
 
-        try:
-            data = json.loads(response)
-        except json.JSONDecodeError:
-            logger.warning("Experience LLM response was not valid JSON; using deterministic classification")
-            return None
-
-        if not isinstance(data, dict):
-            logger.warning("Experience LLM response was not a JSON object; using deterministic classification")
-            return None
-
-        sentiment = data.get("sentiment")
-        emotion = data.get("emotion")
-        if sentiment not in SENTIMENT_VALUES or emotion not in EMOTION_VALUES:
-            logger.warning("Experience LLM response had invalid labels; using deterministic classification")
-            return None
+        sentiment = response.sentiment
+        emotion = response.emotion
 
         evidence = []
-        for prefix, label in (("sentiment", sentiment), ("emotion", emotion)):
-            line_index = data.get(f"{prefix}_evidence_line")
-            quote = data.get(f"{prefix}_quote")
+        for label, line_index, quote, reason in (
+            (
+                "sentiment",
+                response.sentiment_evidence_line,
+                response.sentiment_quote,
+                response.sentiment_reason,
+            ),
+            (
+                "emotion",
+                response.emotion_evidence_line,
+                response.emotion_quote,
+                response.emotion_reason,
+            ),
+        ):
             if type(line_index) is not int or not isinstance(quote, str) or not quote:
                 continue
             matching_turn = next(
@@ -116,8 +259,7 @@ class CustomerExperienceEvaluator(BaseEvaluator):
                 line_index=line_index,
                 text_snippet=quote,
                 timestamp_s=matching_turn.start_s,
-                reason=data.get(f"{prefix}_reason")
-                or f"LLM identified {label.lower()} customer {prefix}",
+                reason=reason or f"LLM identified {label.lower()} customer experience",
             ))
 
         return sentiment, emotion, evidence

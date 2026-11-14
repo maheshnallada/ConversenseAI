@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from pydantic import BaseModel
 from app.domain.envelope import InteractionEnvelope
 from app.domain.transcript import TranscriptTurn
 from app.evaluation.experience import CustomerExperienceEvaluator
@@ -49,21 +50,22 @@ def test_configured_llm_classifies_sentiment_and_emotion():
 
         def __init__(self):
             self.calls = []
+            self.response_formats = []
 
-        def chat_completion(self, messages):
+        def chat_completion(self, messages, response_format=None):
             self.calls.append(messages)
-            return json.dumps(
-                {
-                    "sentiment": "Negative",
-                    "emotion": "Frustrated",
-                    "sentiment_evidence_line": 2,
-                    "sentiment_quote": "I am really upset.",
-                    "sentiment_reason": "Customer states they are upset.",
-                    "emotion_evidence_line": 2,
-                    "emotion_quote": "I am really upset.",
-                    "emotion_reason": "Customer expresses frustration.",
-                }
-            )
+            self.response_formats.append(response_format)
+            data = {
+                "sentiment": "Negative",
+                "emotion": "Frustrated",
+                "sentiment_evidence_line": 2,
+                "sentiment_quote": "I am really upset.",
+                "sentiment_reason": "Customer states they are upset.",
+                "emotion_evidence_line": 2,
+                "emotion_quote": "I am really upset.",
+                "emotion_reason": "Customer expresses frustration.",
+            }
+            return response_format(**data) if response_format else json.dumps(data)
 
     client = FakeLLM()
     evaluator = CustomerExperienceEvaluator(llm_client=client)
@@ -87,13 +89,18 @@ def test_configured_llm_classifies_sentiment_and_emotion():
     assert result.details["emotion"] == "Frustrated"
     assert len(result.evidence) == 2
     assert {e.line_index for e in result.evidence} == {2}
+    assert client.response_formats[0] is not None
+    assert isinstance(client.response_formats[0], type)
+    assert issubclass(client.response_formats[0], BaseModel)
+    assert client.calls[0][0]["role"] == "system"
+    assert "Do not evaluate the agent's sentiment or emotion." in client.calls[0][0]["content"]
 
 
 def test_configured_llm_failure_uses_deterministic_provenance():
     class UnavailableLLM:
         is_live_configured = True
 
-        def chat_completion(self, messages):
+        def chat_completion(self, messages, response_format=None):
             return None
 
     evaluator = CustomerExperienceEvaluator(llm_client=UnavailableLLM())

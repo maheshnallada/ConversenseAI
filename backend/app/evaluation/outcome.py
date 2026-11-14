@@ -1,7 +1,6 @@
-import logging
-import json
 import re
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional
+from pydantic import BaseModel
 from app.domain.envelope import InteractionEnvelope
 from app.domain.transcript import TranscriptTurn
 from app.domain.timeline import ReconstructedTimeline
@@ -9,7 +8,21 @@ from app.domain.evaluation import EvaluationResult, EvidenceItem
 from app.evaluation.base import BaseEvaluator
 from app.evaluation.llm_client import LLMClient
 
-logger = logging.getLogger(__name__)
+class OutcomeLLMResponse(BaseModel):
+    outcome: Literal[
+        "Expert call booked",
+        "Call later agreed",
+        "Not interested",
+        "Do not call",
+        "Voicemail",
+        "Call screener or machine",
+        "No outcome: customer left first",
+        "Can't tell",
+    ]
+    evidence_line: Optional[int]
+    quote: str
+    reason: str
+
 
 CORRECT_OUTCOME_VALUES = [
     "Expert call booked",
@@ -352,36 +365,128 @@ class OutcomeEvaluator(BaseEvaluator):
             reason="Customer answered before disconnection"
         )]
 
+    OUTCOME_SYSTEM_PROMPT = """
+            You are an expert conversation evaluator specializing in
+            health-insurance customer calls.
+
+            Your task is to determine the actual outcome of a customer call
+            by carefully analyzing the supplied conversation transcript.
+
+            You must classify what actually happened, not what the agent
+            intended to happen or what the system expected to happen.
+
+            EVALUATION PRINCIPLES:
+
+            1. Read the entire transcript before making a decision.
+            2. Consider both agent and customer statements.
+            3. Prioritize the customer's explicit statements and decisions.
+            4. Distinguish between customer interest, callback agreement,
+            expert-call booking, rejection, and call abandonment.
+            5. Do not assume that an appointment was booked merely because
+            the agent said it would be booked.
+            6. Do not interpret a polite acknowledgment such as "okay",
+            "fine", or "hmm" as explicit consent without sufficient context.
+            7. A callback request is not automatically an expert-call booking.
+            8. If the customer leaves before a meaningful outcome is reached,
+            classify it as customer left first.
+            9. Do not infer an outcome from missing information.
+            10. If the transcript does not provide sufficient evidence,
+                return "Can't tell".
+
+            OUTCOME CLASSIFICATION GUIDELINES:
+
+            Use only the supplied allowed outcome values.
+
+            Determine the outcome using these distinctions:
+
+            - Expert call booked:
+            The customer explicitly agrees to an expert consultation or
+            appointment, and the conversation establishes that booking.
+
+            - Call later agreed:
+            The customer agrees to be contacted later, but an expert
+            appointment is not established.
+
+            - Not interested:
+            The customer clearly declines the offer or expresses no interest.
+
+            - Do not call:
+            The customer explicitly requests that they not be contacted again.
+
+            - Voicemail:
+            The call reaches a voicemail system or voicemail greeting.
+
+            - Call screener or machine:
+            A machine, automated answering system, or call-screening
+            service answers instead of the intended customer.
+
+            - No outcome: customer left first:
+            The customer disconnects or leaves before a meaningful outcome
+            is established.
+
+            - Can't tell:
+            The available transcript is insufficient or ambiguous.
+
+            EVIDENCE REQUIREMENTS:
+
+            1. Provide the line number that most directly supports the outcome.
+            2. The evidence quote must be copied exactly from that line.
+            3. Do not combine multiple lines into a fabricated quote.
+            4. If the outcome depends on multiple statements, choose the
+            most decisive statement as primary evidence.
+            5. If no reliable evidence exists, use null for evidence_line
+            and an empty string for quote.
+            6. Explain briefly why the evidence supports the classification.
+
+            IMPORTANT:
+            - Do not invent appointment dates, times, consent, or booking status.
+            - Do not treat agent claims as proof of customer agreement.
+            - Do not use external assumptions or information outside the transcript.
+            """
+
+
+    @staticmethod
+    def build_outcome_prompt(transcript_str, allowed_values):
+        return f"""
+            Evaluate the following customer call transcript.
+
+            ALLOWED OUTCOME VALUES:
+            {', '.join(allowed_values)}
+
+            TRANSCRIPT:
+            {transcript_str}
+            """
+
+
     def _llm_evaluate_outcome(self, turns: List[TranscriptTurn]):
         transcript_str = "\n".join([f"{t.speaker.upper()} [Line {t.turn_index}]: {t.raw_text}" for t in turns])
-        prompt = (
-            f"Analyze this call transcript and classify the correct outcome.\n"
-            f"Allowed values: {', '.join(CORRECT_OUTCOME_VALUES)}\n\n"
-            f"Transcript:\n{transcript_str}\n\n"
-            f"Return JSON: {{\"outcome\": \"<value>\", \"evidence_line\": <int>, \"quote\": \"<quote>\", \"reason\": \"<reason>\"}}"
+        response = self.llm_client.chat_completion(
+            [
+                {"role": "system", "content": self.OUTCOME_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": self.build_outcome_prompt(transcript_str, CORRECT_OUTCOME_VALUES),
+                },
+            ],
+            response_format=OutcomeLLMResponse,
         )
-        res_str = self.llm_client.chat_completion([{"role": "user", "content": prompt}])
-        if not res_str:
+        if not isinstance(response, OutcomeLLMResponse):
             return None
-        try:
-            data = json.loads(res_str)
-            outcome = data.get("outcome")
-            if outcome in CORRECT_OUTCOME_VALUES:
-                evidence = []
-                if "evidence_line" in data and "quote" in data:
-                    line_idx = int(data["evidence_line"])
-                    ref_id = f"turn_line_{line_idx}"
-                    matching_turns = [t for t in turns if t.turn_index == line_idx]
-                    if matching_turns:
-                        ref_id = matching_turns[0].turn_id
-                    evidence.append(EvidenceItem(
+
+        evidence = []
+        if response.evidence_line is not None and response.quote:
+            matching_turn = next(
+                (turn for turn in turns if turn.turn_index == response.evidence_line),
+                None,
+            )
+            if matching_turn and response.quote in matching_turn.raw_text:
+                evidence.append(
+                    EvidenceItem(
                         source_type="transcript_turn",
-                        reference_id=ref_id,
-                        line_index=line_idx,
-                        text_snippet=data.get("quote"),
-                        reason=data.get("reason", "LLM identified outcome evidence")
-                    ))
-                return outcome, evidence, 0.9, "llm"
-        except Exception:
-            pass
-        return None
+                        reference_id=matching_turn.turn_id,
+                        line_index=response.evidence_line,
+                        text_snippet=response.quote,
+                        reason=response.reason or "LLM identified outcome evidence",
+                    )
+                )
+        return response.outcome, evidence, 0.9, "llm"
