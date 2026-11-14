@@ -12,6 +12,9 @@ from app.ingestion.errors import IdempotencyConflict
 from app.ingestion.service import IngestResult, IngestionService
 from app.evaluation.service import EvaluationService
 from app.storage.evaluation_repo import EvaluationRepository
+from app.storage.golden_repo import GoldenDatasetRepository
+from app.validation.golden_loader import load_golden_dataset
+from app.validation.benchmark import BenchmarkEngine
 
 
 class IngestResponse(BaseModel):
@@ -26,6 +29,10 @@ class ProcessFolderRequest(BaseModel):
     )
 
 
+class ImportGoldenRequest(BaseModel):
+    csv_path: Optional[str] = None
+
+
 def create_app(session_factory) -> FastAPI:
     app = FastAPI(title="Conversense AI - Health Call Observability & Evaluation")
     app.state.session_factory = session_factory
@@ -38,6 +45,9 @@ def create_app(session_factory) -> FastAPI:
 
     def get_eval_repo() -> EvaluationRepository:
         return EvaluationRepository(session_factory)
+
+    def get_golden_repo() -> GoldenDatasetRepository:
+        return GoldenDatasetRepository(session_factory)
 
     def require_tenant_id(
         x_tenant_id: Annotated[str | None, Header()] = None,
@@ -147,5 +157,59 @@ def create_app(session_factory) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/api/v1/golden-dataset")
+    def list_golden_dataset(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        labels = get_golden_repo().get_all()
+        return [asdict(label) for label in labels]
+
+    @app.post("/api/v1/golden-dataset/import")
+    def import_golden_dataset(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+        body: Optional[ImportGoldenRequest] = None,
+    ):
+        root = Path(__file__).resolve().parent.parent.parent.parent
+        data_root = (root / "data").resolve()
+        if body and body.csv_path:
+            requested_path = Path(body.csv_path)
+            csv_path = (
+                requested_path if requested_path.is_absolute() else data_root / requested_path
+            )
+        else:
+            csv_path = data_root / "golden_dataset.csv"
+        csv_path = csv_path.resolve()
+        if not csv_path.is_relative_to(data_root):
+            raise HTTPException(
+                status_code=400,
+                detail="csv_path must resolve beneath the approved dataset directory",
+            )
+        try:
+            labels = load_golden_dataset(csv_path)
+            get_golden_repo().save_many(labels)
+            return {"imported": len(labels), "path": str(csv_path)}
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/v1/golden-dataset/benchmark")
+    def get_golden_benchmark(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        golden_labels = get_golden_repo().get_all()
+        if not golden_labels:
+            raise HTTPException(status_code=404, detail="No golden dataset labels loaded.")
+
+        evaluation_service = get_eval_service()
+        evaluation_repo = get_eval_repo()
+        evaluations_by_call = {}
+        for label in golden_labels:
+            resolved_id = evaluation_service.resolve_interaction_id(tenant_id, label.call_id)
+            evaluations_by_call[label.call_id] = evaluation_repo.get_by_interaction(
+                tenant_id, resolved_id
+            )
+
+        report = BenchmarkEngine().evaluate_benchmark(golden_labels, evaluations_by_call)
+        return asdict(report)
 
     return app

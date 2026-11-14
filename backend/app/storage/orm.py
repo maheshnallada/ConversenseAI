@@ -123,7 +123,7 @@ class InteractionTimelineRow(Base):
     first_conversational_failure_time_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     timeline_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
- 
+
 class ObservabilityMetricsRow(Base):
     __tablename__ = "observability_metrics"
     __table_args__ = (
@@ -189,7 +189,7 @@ class EvaluationResultRow(Base):
     details_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
- 
+
 class ImportRunRow(Base):
     __tablename__ = "import_runs"
 
@@ -202,3 +202,22 @@ class ImportRunRow(Base):
     summary_json: Mapped[str] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GoldenCallLabelRow(Base):
+    __tablename__ = "golden_dataset_labels"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    call_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    interaction_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    what_happened: Mapped[str] = mapped_column(String(128))
+    correct_outcome: Mapped[str] = mapped_column(String(128))
+    facts_customer_gave: Mapped[str] = mapped_column(Text, default="")
+    sentiment: Mapped[str] = mapped_column(String(32))
+    emotion: Mapped[str] = mapped_column(String(32))
+    overall: Mapped[str] = mapped_column(String(32))
+    first_thing_wrong_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_thing_wrong_what: Mapped[str | None] = mapped_column(Text, nullable=True)
+    never_rule_broken: Mapped[str] = mapped_column(String(128), default="None")
+    reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
