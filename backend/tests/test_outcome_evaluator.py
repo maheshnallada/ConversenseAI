@@ -1,5 +1,6 @@
 import pytest
 from app.domain.envelope import InteractionEnvelope
+from app.domain.timeline import ReconstructedTimeline, TimelineEvent
 from app.domain.transcript import TranscriptTurn
 from app.evaluation.outcome import OutcomeEvaluator
 from app.evaluation.llm_client import LLMClient
@@ -63,3 +64,144 @@ def test_outcome_evaluator_voicemail():
     ]
     res = evaluator.evaluate(_envelope("c4"), turns)
     assert res.label == "Voicemail"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Your call is being screened. Please say who you are.",
+        "This is an automated recording.",
+        "The answering machine is not available.",
+    ],
+)
+def test_outcome_evaluator_call_screening_or_machine(message):
+    evaluator = OutcomeEvaluator()
+    turns = [
+        TranscriptTurn("t1", "c5", "ten1", 1, "customer", message, message.lower())
+    ]
+
+    result = evaluator.evaluate(_envelope("c5"), turns)
+
+    assert result.label == "Call screener or machine"
+
+
+def test_generic_insurance_confirmation_is_not_an_expert_booking():
+    evaluator = OutcomeEvaluator()
+    turns = [
+        TranscriptTurn(
+            "t1",
+            "c6",
+            "ten1",
+            1,
+            "agent",
+            "We offer expert calls; do you already have insurance?",
+            "we offer expert calls; do you already have insurance?",
+        ),
+        TranscriptTurn(
+            "t2",
+            "c6",
+            "ten1",
+            2,
+            "customer",
+            "Yes, I have insurance.",
+            "yes, i have insurance.",
+        ),
+    ]
+
+    result = evaluator.evaluate(_envelope("c6"), turns)
+
+    assert result.label != "Expert call booked"
+
+
+def test_insurance_statement_is_not_booking_confirmation_after_a_proposal():
+    evaluator = OutcomeEvaluator()
+    turns = [
+        TranscriptTurn(
+            "t1",
+            "c9",
+            "ten1",
+            1,
+            "agent",
+            "Can we schedule our expert call tomorrow at 4 PM?",
+            "can we schedule our expert call tomorrow at 4 pm?",
+        ),
+        TranscriptTurn(
+            "t2",
+            "c9",
+            "ten1",
+            2,
+            "customer",
+            "Yes, I have insurance.",
+            "yes, i have insurance.",
+        ),
+    ]
+
+    result = evaluator.evaluate(_envelope("c9"), turns)
+
+    assert result.label != "Expert call booked"
+
+
+def test_substring_yes_in_yesterday_is_not_a_booking_confirmation():
+    evaluator = OutcomeEvaluator()
+    turns = [
+        TranscriptTurn(
+            "t1",
+            "c7",
+            "ten1",
+            1,
+            "agent",
+            "Can we schedule an expert call tomorrow at 4 PM?",
+            "can we schedule an expert call tomorrow at 4 pm?",
+        ),
+        TranscriptTurn(
+            "t2",
+            "c7",
+            "ten1",
+            2,
+            "customer",
+            "Yesterday is too soon.",
+            "yesterday is too soon.",
+        ),
+    ]
+
+    result = evaluator.evaluate(_envelope("c7"), turns)
+
+    assert result.label != "Expert call booked"
+
+
+def test_outcome_uses_timeline_events_for_late_opening():
+    evaluator = OutcomeEvaluator()
+    turns = [
+        TranscriptTurn("agent_1", "c8", "ten1", 0, "agent", "Hello.", "hello."),
+        TranscriptTurn(
+            "customer_1",
+            "c8",
+            "ten1",
+            1,
+            "customer",
+            "I have an existing plan and wanted to ask some questions.",
+            "i have an existing plan and wanted to ask some questions.",
+        ),
+    ]
+    timeline = ReconstructedTimeline(
+        tenant_id="ten1",
+        interaction_id="c8",
+        total_duration_s=10.0,
+        agent_turn_count=1,
+        customer_turn_count=0,
+        overlap_count=0,
+        total_overlap_s=0.0,
+        events=[
+            TimelineEvent(
+                "turn_0",
+                "turn",
+                speaker="agent",
+                start_s=4.5,
+            )
+        ],
+    )
+
+    result = evaluator.evaluate(_envelope("c8"), turns, timeline=timeline)
+
+    assert result.details["what_happened"] == "Agent's first words came late (over 3 s)"
+    assert any("4.50s" in evidence.reason for evidence in result.evidence)

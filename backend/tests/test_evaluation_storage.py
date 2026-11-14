@@ -1,4 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import pytest
+from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 
 from app.domain.evaluation import EvaluationResult, EvidenceItem
@@ -81,4 +85,47 @@ def test_query_by_review_status():
     assert len(flagged_list) == 1
     assert flagged_list[0].interaction_id == "call_02"
     assert flagged_list[0].severity == "high"
+
+
+def test_concurrent_saves_replace_the_same_evaluation_key(tmp_path):
+    database_path = tmp_path / "concurrent-evaluations.sqlite3"
+    factory = create_session_factory(f"sqlite:///{database_path}")
+    init_db(factory)
+    repo = EvaluationRepository(factory)
+    barrier = Barrier(2)
+
+    def save_result(label):
+        result = _sample_result("call_concurrent")
+        result.label = label
+        barrier.wait()
+        repo.save_results("tenant_eval", "call_concurrent", [result])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(save_result, "PASSED"),
+            executor.submit(save_result, "FAILED"),
+        ]
+        for future in futures:
+            future.result()
+
+    results = repo.get_results("tenant_eval", "call_concurrent")
+    assert len(results) == 1
+    assert results[0].label in {"PASSED", "FAILED"}
+
+
+def test_saves_evaluations_with_an_atomic_upsert():
+    factory = _factory()
+    repo = EvaluationRepository(factory)
+    statements = []
+    event.listen(
+        factory.engine,
+        "before_cursor_execute",
+        lambda connection, cursor, statement, parameters, context, executemany:
+            statements.append(statement),
+    )
+
+    repo.save_results("tenant_eval", "call_01", [_sample_result()])
+
+    writes = [statement.upper() for statement in statements]
+    assert any("INSERT INTO EVALUATION_RESULTS" in sql and "ON CONFLICT" in sql for sql in writes)
 

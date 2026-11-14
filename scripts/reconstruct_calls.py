@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def main():
     parser.add_argument(
         "--tenant-id",
         type=str,
-        default="health_campaign",
+        default=os.getenv("TENANT_ID", "health_campaign"),
         help="Tenant ID for timeline records",
     )
     parser.add_argument(

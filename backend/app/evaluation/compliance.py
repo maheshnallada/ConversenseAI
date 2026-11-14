@@ -1,5 +1,7 @@
 import json
 import re
+from collections.abc import Mapping
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +36,11 @@ class ComplianceEvaluator(BaseEvaluator):
             "sensitive_data_keywords": ["aadhaar", "pan card", "pan number", "bank account", "cvv", "otp", "atm pin"],
             "premium_quote_patterns": [r"\b\d{3,6}\s*(?:rupees|rs|inr|per year|per month)\b", r"(?:rs\.?|rupees)\s*\d{3,6}"],
             "ai_denial_keywords": ["i am a human", "i am human", "i am not an ai", "i am not a robot", "main insaan hoon"],
-            "appointment_rules": {"earliest_hour": 9, "latest_hour": 21},
+            "appointment_rules": {
+                "earliest_hour": 9,
+                "latest_hour": 21,
+                "allow_same_day": False,
+            },
         }
 
     def evaluate(
@@ -100,30 +106,83 @@ class ComplianceEvaluator(BaseEvaluator):
                 )
 
         # 4. Never-Rule: Appointment Window (09:00 - 21:00)
-        domain = interaction.domain_data or {}
-        end_call = domain.get("meta", {}).get("end_call") or {}
-        record = end_call.get("record") or {}
-        booking_time = record.get("time")
+        domain = interaction.domain_data
+        domain = domain if isinstance(domain, Mapping) else {}
+        meta = domain.get("meta")
+        meta = meta if isinstance(meta, Mapping) else {}
+        end_call = meta.get("end_call")
+        end_call = end_call if isinstance(end_call, Mapping) else {}
+        record = end_call.get("record")
+        record = record if isinstance(record, Mapping) else {}
 
-        if booking_time:
-            try:
-                # time format like "07:00" or "11:00"
-                hour = int(booking_time.split(":")[0])
-                earliest = self.rules.get("appointment_rules", {}).get("earliest_hour", 9)
-                latest = self.rules.get("appointment_rules", {}).get("latest_hour", 21)
-                if hour < earliest or hour >= latest:
-                    evidence.append(
-                        EvidenceItem(
-                            source_type="metadata",
-                            reference_id="end_call.record.time",
-                            line_index=None,
-                            text_snippet=f"Booked time: {booking_time}",
-                            timestamp_s=None,
-                            reason=f"Appointment booked at {booking_time}, outside permitted 9 AM–9 PM window",
-                        )
+        appointment_rules = self.rules.get("appointment_rules")
+        appointment_rules = appointment_rules if isinstance(appointment_rules, Mapping) else {}
+        booking_time = record.get("time")
+        time_match = re.fullmatch(r"(\d{1,2}):([0-5]\d)", booking_time) if isinstance(booking_time, str) else None
+        if time_match:
+            hour = int(time_match.group(1))
+            earliest = appointment_rules.get("earliest_hour", 9)
+            latest = appointment_rules.get("latest_hour", 21)
+            if hour <= 23 and (hour < earliest or hour >= latest):
+                evidence.append(
+                    EvidenceItem(
+                        source_type="metadata",
+                        reference_id="end_call.record.time",
+                        line_index=None,
+                        text_snippet=f"Booked time: {booking_time}",
+                        timestamp_s=None,
+                        reason=f"Appointment booked at {booking_time}, outside permitted 9 AM–9 PM window",
                     )
-            except Exception:
+                )
+
+        appointment_date = record.get("date")
+        parsed_appointment_date = None
+        if isinstance(appointment_date, datetime):
+            parsed_appointment_date = appointment_date.date()
+        elif isinstance(appointment_date, date):
+            parsed_appointment_date = appointment_date
+        elif isinstance(appointment_date, str):
+            try:
+                parsed_appointment_date = date.fromisoformat(appointment_date.strip())
+            except ValueError:
                 pass
+
+        if appointment_rules.get("allow_same_day") is False and parsed_appointment_date:
+            call_date = (
+                interaction.started_at.date()
+                if interaction.started_at is not None
+                else datetime.now(timezone.utc).date()
+            )
+            if parsed_appointment_date == call_date:
+                evidence.append(
+                    EvidenceItem(
+                        source_type="metadata",
+                        reference_id="end_call.record.date",
+                        line_index=None,
+                        text_snippet=f"Booked date: {appointment_date}",
+                        timestamp_s=None,
+                        reason="Appointment booked on the call date, but same-day bookings are not permitted",
+                    )
+                )
+
+        disallowed_insurers = self.rules.get("disallowed_insurers_pushing", [])
+        if isinstance(disallowed_insurers, list):
+            for turn in agent_turns:
+                text = (turn.normalized_text or turn.raw_text or "").lower()
+                for insurer in disallowed_insurers:
+                    if isinstance(insurer, str) and insurer and re.search(
+                        rf"\b{re.escape(insurer.lower())}\b", text
+                    ):
+                        evidence.append(
+                            EvidenceItem(
+                                source_type="transcript_turn",
+                                reference_id=turn.turn_id,
+                                line_index=turn.turn_index,
+                                text_snippet=turn.raw_text,
+                                timestamp_s=turn.start_s,
+                                reason=f"Agent mentioned disallowed insurer: {insurer}",
+                            )
+                        )
 
         has_violations = len(evidence) > 0
         label = "FAILED" if has_violations else "PASSED"

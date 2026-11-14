@@ -67,3 +67,26 @@ def test_dual_duration_clocks_preserved():
     assert metrics.recording_duration_s == 68.54
     assert metrics.recording_duration_s != metrics.telephony_duration_s
 
+
+def test_interaction_metrics_preserve_raw_sequential_latency_samples():
+    turns = [
+        TranscriptTurn(
+            "customer_1", "call_18_test", "ten1", 0, "customer",
+            "Hello", "hello", start_s=0.5, end_s=1.5,
+        ),
+        TranscriptTurn(
+            "agent_1", "call_18_test", "ten1", 1, "agent",
+            "Hi", "hi", start_s=2.0, end_s=3.0,
+        ),
+    ]
+
+    metrics = calculate_interaction_metrics(
+        tenant_id="ten1",
+        interaction_id="call_18_test",
+        call_data={"meta": {}, "models": {}},
+        turns=turns,
+        rate_card=RateCardManager(),
+    )
+
+    assert metrics.response_latency_samples == [0.5]
+

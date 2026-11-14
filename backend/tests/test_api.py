@@ -1,7 +1,8 @@
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 
-from app.api.app import create_app
+from app.api.app import ProcessFolderRequest, create_app
 from app.storage.db import create_session_factory, init_db
 
 
@@ -24,6 +25,14 @@ def _body():
         "interaction_type": "voice",
         "execution": {"input_tokens": 0, "output_tokens": 3, "cost": None},
     }
+
+
+def test_process_folder_request_default_reads_environment_tenant(monkeypatch):
+    monkeypatch.setenv("TENANT_ID", "tenant_from_env")
+
+    request = ProcessFolderRequest(call_folder_path="call-folder")
+
+    assert request.tenant_id == "tenant_from_env"
 
 
 def test_post_then_get_round_trip():
@@ -71,6 +80,30 @@ def test_missing_tenant_header_is_rejected():
     assert response.status_code == 401
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/api/v1/interactions", _body()),
+        ("GET", "/api/v1/interactions/interaction_001", None),
+        ("POST", "/api/v1/interactions/interaction_001/evaluate", None),
+        ("GET", "/api/v1/interactions/interaction_001/evaluations", None),
+        (
+            "POST",
+            "/api/v1/interactions/process-and-evaluate",
+            {"call_folder_path": "missing-call-folder"},
+        ),
+    ],
+)
+@pytest.mark.parametrize("tenant_header", [None, ""])
+def test_all_tenant_scoped_routes_reject_missing_or_empty_header(method, path, body, tenant_header):
+    client = _client()
+    headers = {} if tenant_header is None else {"X-Tenant-Id": tenant_header}
+
+    response = client.request(method, path, headers=headers, json=body)
+
+    assert response.status_code == 401
+
+
 def test_tenant_header_must_match_body():
     client = _client()
     response = client.post(
@@ -78,6 +111,18 @@ def test_tenant_header_must_match_body():
         headers={"X-Tenant-Id": "tenant_002"},
         json=_body(),
     )
+    assert response.status_code == 403
+
+
+def test_process_and_evaluate_rejects_body_tenant_that_conflicts_with_header():
+    client = _client()
+
+    response = client.post(
+        "/api/v1/interactions/process-and-evaluate",
+        headers={"X-Tenant-Id": "tenant_002"},
+        json={"call_folder_path": "missing-call-folder", "tenant_id": "tenant_001"},
+    )
+
     assert response.status_code == 403
 
 

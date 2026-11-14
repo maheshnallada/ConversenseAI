@@ -13,7 +13,7 @@ def _factory():
     return f
 
 
-def _sample_metrics(interaction_id="call_01", cost=0.015):
+def _sample_metrics(interaction_id="call_01", cost=0.015, currency="USD", latency_samples=None):
     return InteractionMetrics(
         tenant_id="tenant_obs",
         interaction_id=interaction_id,
@@ -34,13 +34,14 @@ def _sample_metrics(interaction_id="call_01", cost=0.015):
         input_tokens=1000,
         output_tokens=200,
         total_tokens=1200,
+        response_latency_samples=latency_samples or [],
         cost_breakdown=CostBreakdown(
             llm_cost=0.0001,
             stt_cost=0.002,
             tts_cost=0.003,
             telephony_cost=0.01,
             total_cost=cost,
-            currency="USD",
+            currency=currency,
         ),
     )
 
@@ -59,6 +60,7 @@ def test_save_and_get_metrics():
     assert retrieved.recording_duration_s == 60.0
     assert retrieved.telephony_duration_s == 58.5
     assert retrieved.response_latency_percentiles.p50 == 0.9
+    assert retrieved.response_latency_samples == []
     assert retrieved.cost_breakdown.total_cost == 0.015
 
     # Test idempotency (re-saving replaces cleanly)
@@ -82,4 +84,43 @@ def test_platform_summary_aggregation():
     assert summary.total_agent_turns == 12
     assert summary.total_customer_turns == 8
     assert round(summary.total_cost, 4) == 0.030
+    assert summary.currency == "USD"
+
+
+def test_platform_summary_aggregates_raw_latency_samples_and_currency():
+    factory = _factory()
+    repo = ObservabilityRepository(factory)
+    repo.save_metrics(
+        _sample_metrics("call_01", cost=0.010, currency="EUR", latency_samples=[1.0, 2.0, 100.0])
+    )
+    repo.save_metrics(
+        _sample_metrics("call_02", cost=0.020, currency="EUR", latency_samples=[10.0])
+    )
+
+    summary = repo.get_platform_summary("tenant_obs")
+
+    assert summary.overall_latency_percentiles.p50 == 6.0
+    assert summary.currency == "EUR"
+    assert summary.total_cost == 0.03
+
+
+def test_platform_summary_marks_mixed_currency_totals_unavailable():
+    factory = _factory()
+    repo = ObservabilityRepository(factory)
+    repo.save_metrics(_sample_metrics("call_usd", cost=0.010, currency="USD"))
+    repo.save_metrics(_sample_metrics("call_eur", cost=0.020, currency="EUR"))
+
+    summary = repo.get_platform_summary("tenant_obs")
+
+    assert summary.currency == "MIXED"
+    assert summary.total_cost is None
+
+
+def test_empty_platform_summary_uses_zero_usd_total():
+    repo = ObservabilityRepository(_factory())
+
+    summary = repo.get_platform_summary("tenant_without_metrics")
+
+    assert summary.currency == "USD"
+    assert summary.total_cost == 0.0
 

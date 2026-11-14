@@ -153,6 +153,7 @@ def calculate_interaction_metrics(
         customer_turn_count=len(customer_turns),
         first_agent_latency_s=first_agent_latency,
         response_latency_percentiles=percentiles,
+        response_latency_samples=sequential_latencies,
         longest_silence_s=longest_silence,
         overlap_count=overlap_count,
         total_overlap_s=round(total_overlap_s, 3),

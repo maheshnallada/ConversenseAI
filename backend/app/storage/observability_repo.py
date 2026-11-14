@@ -30,6 +30,7 @@ class ObservabilityRepository:
             "customer_turn_count": metrics.customer_turn_count,
             "first_agent_latency_s": metrics.first_agent_latency_s,
             "response_latency_percentiles": asdict(metrics.response_latency_percentiles),
+            "response_latency_samples": metrics.response_latency_samples,
             "longest_silence_s": metrics.longest_silence_s,
             "overlap_count": metrics.overlap_count,
             "total_overlap_s": metrics.total_overlap_s,
@@ -105,6 +106,7 @@ class ObservabilityRepository:
                 customer_turn_count=data.get("customer_turn_count", 0),
                 first_agent_latency_s=data.get("first_agent_latency_s"),
                 response_latency_percentiles=PercentilesResult(**pct_data),
+                response_latency_samples=data.get("response_latency_samples") or [],
                 longest_silence_s=data.get("longest_silence_s"),
                 overlap_count=data.get("overlap_count", 0),
                 total_overlap_s=data.get("total_overlap_s", 0.0),
@@ -136,10 +138,21 @@ class ObservabilityRepository:
             total_overlap_dur = sum(r.total_overlap_s for r in rows)
             total_in_tok = sum(r.input_tokens or 0 for r in rows)
             total_out_tok = sum(r.output_tokens or 0 for r in rows)
-            total_cost = sum(r.total_cost or 0.0 for r in rows)
+            currencies = {r.cost_currency for r in rows}
+            if not rows:
+                currency = "USD"
+                total_cost = 0.0
+            elif len(currencies) > 1:
+                currency = "MIXED"
+                total_cost = None
+            else:
+                currency = next(iter(currencies))
+                total_cost = round(sum(r.total_cost or 0.0 for r in rows), 4)
 
-            # Collect all measured p50s to compute overall distribution
-            latencies = [r.p50_response_latency_s for r in rows if r.p50_response_latency_s is not None]
+            latencies = []
+            for row in rows:
+                metrics_data = json.loads(row.metrics_json)
+                latencies.extend(metrics_data.get("response_latency_samples") or [])
             overall_pct = calculate_percentiles(latencies)
 
             return PlatformObservabilitySummary(
@@ -154,7 +167,7 @@ class ObservabilityRepository:
                 total_overlap_duration_s=round(total_overlap_dur, 2),
                 total_input_tokens=total_in_tok,
                 total_output_tokens=total_out_tok,
-                total_cost=round(total_cost, 4),
-                currency="USD",
+                total_cost=total_cost,
+                currency=currency,
             )
 
