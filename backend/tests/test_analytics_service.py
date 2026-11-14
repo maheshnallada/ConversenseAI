@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import text
 from app.storage.db import create_session_factory, init_db
-from app.storage.orm import InteractionRow
+from app.storage.orm import EvaluationBatchRow, InteractionEventRow, InteractionRow
 from app.analytics.service import AnalyticsService
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.domain.observability import InteractionMetrics, PercentilesResult
@@ -154,7 +154,9 @@ def _cost_metrics(
             stt_cost=None,
             tts_cost=None,
             telephony_cost=telephony_cost,
-            total_cost=cost + (telephony_cost or 0),
+            total_cost=(
+                cost + (telephony_cost or 0) if cost is not None else None
+            ),
             currency=currency,
         ),
     )
@@ -194,12 +196,9 @@ def test_overview_analytics(analytics_service):
     overview = analytics_service.get_overview_analytics(tenant_id="health_campaign")
 
     assert overview["total_interactions"] == 1
-    assert overview["completed_interactions"] >= 0
-    assert overview["abandoned_interactions"] >= 0
-    assert "quality_distribution" in overview
-    assert "compliance_findings" in overview
-    assert overview["total_cost_usd"] > 0
-    assert overview["avg_latency_s"] is not None
+    assert overview["interaction_status_counts"]["completed"] == 1
+    assert overview["metrics_available_interactions"] == 1
+    assert "quality_distribution" not in overview
 
 def test_quality_analytics(analytics_service):
     quality = analytics_service.get_quality_analytics(tenant_id="health_campaign")
@@ -242,11 +241,13 @@ def test_overview_classifies_noncompleted_statuses_separately():
 
     overview = service.get_overview_analytics("tenant_status")
 
-    assert overview["completed_interactions"] == 1
-    assert overview["abandoned_interactions"] == 1
-    assert overview["failed_interactions"] == 1
-    assert overview["pending_interactions"] == 1
-    assert overview["unknown_interactions"] == 2
+    assert overview["interaction_status_counts"] == {
+        "completed": 1,
+        "abandoned": 1,
+        "failed": 1,
+        "pending": 1,
+        "unknown": 2,
+    }
 
 
 def test_analytics_uses_latest_versioned_run_not_archival_results():
@@ -311,10 +312,8 @@ def test_analytics_uses_latest_versioned_run_not_archival_results():
     quality = service.get_quality_analytics("tenant_latest")
     page = service.get_interactions_page("tenant_latest")
 
-    assert overview["quality_distribution"] == {"Bad": 1}
-    assert overview["compliance_findings"]["FAILED"] == 1
-    assert overview["compliance_findings"]["PASSED"] == 0
-    assert overview["successful_outcomes"] == 0
+    assert overview["interaction_status_counts"] == {"completed": 1}
+    assert "quality_distribution" not in overview
     assert quality["outcomes"] == {"Not interested": 1}
     assert quality["overall_quality"] == {"Bad": 1}
     assert page["items"][0]["quality"] == "Bad"
@@ -344,4 +343,135 @@ def test_cost_analytics_empty_result_has_no_currency_or_total():
     assert cost["total_cost"] is None
     assert cost["currency"] is None
     assert cost["cost_by_currency"] == {}
+
+
+def test_reliability_uses_persisted_interaction_statuses_and_failures_only():
+    from app.storage.orm import InteractionTimelineRow
+
+    service, factory = _isolated_service()
+    with factory.begin() as session:
+        session.add(_interaction("tenant_reliability", "call-failed", "failed"))
+        session.add(_interaction("tenant_reliability", "call-complete", "completed"))
+        session.add(
+            InteractionTimelineRow(
+                tenant_id="tenant_reliability",
+                interaction_id="call-failed",
+                total_duration_s=12.0,
+                agent_turn_count=1,
+                customer_turn_count=1,
+                overlap_count=0,
+                total_overlap_s=0.0,
+                first_technical_failure_type="AGENT_PLAYBACK_CUT",
+                first_technical_failure_turn=1,
+                first_technical_failure_time_s=4.0,
+                first_conversational_failure_type=None,
+                first_conversational_failure_turn=None,
+                first_conversational_failure_time_s=None,
+                timeline_json=json.dumps(
+                    {
+                        "failures": [
+                            {
+                                "failure_type": "AGENT_PLAYBACK_CUT",
+                                "category": "technical",
+                                "turn_index": 1,
+                                "time_s": 4.0,
+                                "evidence": "playback metadata",
+                            },
+                            {
+                                "failure_type": "CUSTOMER_INTERRUPTION",
+                                "category": "conversational",
+                                "turn_index": 2,
+                                "time_s": 6.0,
+                                "evidence": "overlap metadata",
+                            },
+                        ]
+                    }
+                ),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        session.add(
+            InteractionEventRow(
+                tenant_id="tenant_reliability",
+                interaction_id="call-failed",
+                event_id="event-failed",
+                event_type="provider.call.failed",
+                occurred_at=None,
+                payload_json=json.dumps({"reason": "timeout"}),
+                event_hash="event-failed-hash",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+    reliability = service.get_reliability_analytics("tenant_reliability")
+
+    assert reliability["interaction_status_counts"] == {"failed": 1, "completed": 1}
+    assert reliability["technical_failures"] == {"AGENT_PLAYBACK_CUT": 1}
+    assert reliability["conversational_failures"] == {"CUSTOMER_INTERRUPTION": 1}
+    assert reliability["supplied_event_failures"] == {"provider.call.failed": 1}
+    assert reliability["interactions_with_failures"] == 1
+    assert "quality_distribution" not in reliability
+
+
+def test_usage_reports_missing_usage_as_unavailable():
+    service, _ = _isolated_service()
+
+    usage = service.get_usage_analytics("tenant_no_usage")
+
+    assert usage["usage_available"] is False
+    assert usage["input_tokens"] is None
+    assert usage["output_tokens"] is None
+    assert usage["estimated_cost"] is None
+
+
+def test_usage_keeps_unpriced_estimate_unavailable_but_preserves_reported_tokens():
+    service, factory = _isolated_service()
+    ObservabilityRepository(factory).save_metrics(
+        _cost_metrics(
+            "call-unpriced",
+            "USD",
+            None,
+            tenant_id="tenant_unpriced",
+            input_tokens=100,
+            output_tokens=50,
+        )
+    )
+
+    usage = service.get_usage_analytics("tenant_unpriced")
+
+    assert usage["usage_available"] is True
+    assert usage["input_tokens"] == 100
+    assert usage["output_tokens"] == 50
+    assert usage["estimated_cost"] is None
+    assert usage["cost_availability"] == "unavailable"
+
+
+def test_usage_includes_completed_provider_reported_evaluation_batch_tokens():
+    service, factory = _isolated_service()
+    now = datetime.now(timezone.utc)
+    EvaluationRepository(factory).save_run(
+        _evaluation_run(
+            "tenant_eval_usage",
+            "call_eval_usage",
+            "run-eval-usage",
+            now,
+            "Good",
+            "Expert call booked",
+            "NOT_DETECTED",
+        )
+    )
+    with factory.begin() as session:
+        rows = session.query(EvaluationBatchRow).filter_by(
+            run_id="run-eval-usage"
+        ).all()
+        rows[0].input_tokens = 13
+        rows[0].output_tokens = 8
+
+    usage = service.get_usage_analytics("tenant_eval_usage")
+
+    assert usage["usage_available"] is True
+    assert usage["evaluation_input_tokens"] == 13
+    assert usage["evaluation_output_tokens"] == 8
+    assert usage["input_tokens"] == 13
+    assert usage["output_tokens"] == 8
 

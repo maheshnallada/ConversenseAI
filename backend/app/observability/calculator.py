@@ -161,6 +161,8 @@ def calculate_interaction_metrics(
     tts_model = tts_usage.get("model")
 
     model_name = models.get("model")
+    stt_provider = stt_usage.get("provider")
+    telephony_channel = line.get("channel") or call_data.get("channel")
     cost_breakdown = rc.calculate_interaction_cost(
         model_name=model_name,
         input_tokens=in_tokens,
@@ -169,6 +171,10 @@ def calculate_interaction_metrics(
         tts_audio_s=tts_audio_s,
         connected_s=telephony_duration,
         tts_model=tts_model,
+        stt_provider=stt_provider,
+        telephony_channel=(
+            telephony_channel if isinstance(telephony_channel, str) else None
+        ),
     )
 
     meta = call_data.get("meta")
@@ -214,6 +220,7 @@ def calculate_interaction_metrics(
         total_tokens=tot_tokens,
         cost_breakdown=cost_breakdown,
         calculation_version=calculation_version,
+        rate_card_version=rc.version if rc.is_valid else None,
         playback_status_counts=reconciliation.playback_status_counts,
         playback_mismatches=reconciliation.mismatches,
         playback_review_required=reconciliation.review_required,

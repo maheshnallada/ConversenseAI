@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,7 @@ class CostBreakdown:
     tts_cost: float | None
     telephony_cost: float | None
     total_cost: float | None
-    currency: str = "USD"
+    currency: str = "UNKNOWN"
 
 
 @dataclass
@@ -32,6 +33,15 @@ class ObservabilityConfig:
         )
 
 
+def _is_positive_finite(value: float | None) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
 class RateCardManager:
     def __init__(self, config_path: Path | str | None = None) -> None:
         if config_path is None:
@@ -41,40 +51,60 @@ class RateCardManager:
 
         self.config_path = Path(config_path)
         self.config_data = self._load()
-        self.currency = self.config_data.get("currency", "USD")
+        self.is_valid = bool(self.config_data)
+        self.version = self.config_data.get("version")
+        self.currency = self.config_data.get("currency", "UNKNOWN")
         self.rates = self.config_data.get("rates", {})
 
-    @staticmethod
-    def _fallback_config() -> dict[str, Any]:
-        return {
-            "currency": "USD",
-            "rates": {
-                "llm": {
-                    "gemini-3.5-flash-lite": {"input_per_1m": 0.30, "output_per_1m": 2.50},
-                    "gpt-4o-mini": {"input_per_1m": 0.15, "output_per_1m": 0.60},
-                },
-                "stt": {"pulse": {"per_minute": 0.006}},
-                "tts": {"bulbul:v3": {"per_minute": 0.015}, "lightning-v3.1": {"per_minute": 0.015}},
-                "telephony": {"phone": {"per_minute": 0.01}},
-            },
-        }
-
     def _load(self) -> dict[str, Any]:
-        if self.config_path.exists():
-            try:
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-                rates = config.get("rates") if isinstance(config, dict) else None
-                valid_rates = isinstance(rates, dict) and all(
-                    isinstance(category_rates, dict)
-                    and all(isinstance(rate, dict) for rate in category_rates.values())
-                    for category_rates in rates.values()
-                )
-                if valid_rates:
-                    return config
-            except Exception:
-                pass
-        return self._fallback_config()
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as rate_file:
+                config = json.load(rate_file)
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+        if not isinstance(config, dict):
+            return {}
+        version = config.get("version")
+        currency = config.get("currency")
+        rates = config.get("rates")
+        if (
+            not isinstance(version, str)
+            or not version.strip()
+            or not isinstance(currency, str)
+            or not currency.strip()
+            or not isinstance(rates, dict)
+        ):
+            return {}
+
+        required_fields = {
+            "llm": {"input_per_1m", "output_per_1m"},
+            "stt": {"per_minute"},
+            "tts": {"per_minute"},
+            "telephony": {"per_minute"},
+        }
+        for category, category_rates in rates.items():
+            if not isinstance(category_rates, dict):
+                return {}
+            fields = required_fields.get(category)
+            for rate in category_rates.values():
+                if not isinstance(rate, dict):
+                    return {}
+                if fields is not None:
+                    if not fields.issubset(rate):
+                        return {}
+                    values = (rate[field] for field in fields)
+                else:
+                    values = rate.values()
+                if any(
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(value)
+                    or value < 0
+                    for value in values
+                ):
+                    return {}
+        return config
 
     def calculate_llm_cost(
         self,
@@ -82,63 +112,71 @@ class RateCardManager:
         input_tokens: int | None,
         output_tokens: int | None,
     ) -> float | None:
-        if not model_name or input_tokens is None or output_tokens is None:
+        if (
+            not model_name
+            or not isinstance(input_tokens, int)
+            or isinstance(input_tokens, bool)
+            or not isinstance(output_tokens, int)
+            or isinstance(output_tokens, bool)
+        ):
             return None
         if input_tokens < 0 or output_tokens < 0:
             return None
 
         clean_model = model_name.lower().split("/")[-1].strip()
         llm_rates = self.rates.get("llm", {})
-
         rate = llm_rates.get(clean_model)
-        if not rate:
-            # Check prefix match
-            for k, v in llm_rates.items():
-                if clean_model.startswith(k):
-                    rate = v
-                    break
-
         if not rate:
             return None
 
-        in_cost = (input_tokens / 1_000_000.0) * rate.get("input_per_1m", 0.0)
-        out_cost = (output_tokens / 1_000_000.0) * rate.get("output_per_1m", 0.0)
+        in_rate = rate.get("input_per_1m")
+        out_rate = rate.get("output_per_1m")
+        if in_rate is None or out_rate is None:
+            return None
+        in_cost = (input_tokens / 1_000_000.0) * in_rate
+        out_cost = (output_tokens / 1_000_000.0) * out_rate
         return round(in_cost + out_cost, 6)
 
     def calculate_stt_cost(
         self,
         audio_s: float | None,
-        provider: str = "pulse",
+        provider: str | None = None,
     ) -> float | None:
-        if audio_s is None or audio_s <= 0:
+        if not _is_positive_finite(audio_s) or provider is None:
             return None
         stt_rates = self.rates.get("stt", {})
-        rate = stt_rates.get(provider) or stt_rates.get("pulse", {"per_minute": 0.006})
-        cost = (audio_s / 60.0) * rate.get("per_minute", 0.006)
+        rate = stt_rates.get(provider)
+        if rate is None or "per_minute" not in rate:
+            return None
+        cost = (audio_s / 60.0) * rate["per_minute"]
         return round(cost, 6)
 
     def calculate_tts_cost(
         self,
         audio_s: float | None,
-        model: str = "bulbul:v3",
+        model: str | None = None,
     ) -> float | None:
-        if audio_s is None or audio_s <= 0:
+        if not _is_positive_finite(audio_s) or model is None:
             return None
         tts_rates = self.rates.get("tts", {})
-        rate = tts_rates.get(model) or tts_rates.get("bulbul:v3", {"per_minute": 0.015})
-        cost = (audio_s / 60.0) * rate.get("per_minute", 0.015)
+        rate = tts_rates.get(model)
+        if rate is None or "per_minute" not in rate:
+            return None
+        cost = (audio_s / 60.0) * rate["per_minute"]
         return round(cost, 6)
 
     def calculate_telephony_cost(
         self,
         connected_s: float | None,
-        channel: str = "phone",
+        channel: str | None = None,
     ) -> float | None:
-        if connected_s is None or connected_s <= 0:
+        if not _is_positive_finite(connected_s) or channel is None:
             return None
         phone_rates = self.rates.get("telephony", {})
-        rate = phone_rates.get(channel) or phone_rates.get("phone", {"per_minute": 0.01})
-        cost = (connected_s / 60.0) * rate.get("per_minute", 0.01)
+        rate = phone_rates.get(channel)
+        if rate is None or "per_minute" not in rate:
+            return None
+        cost = (connected_s / 60.0) * rate["per_minute"]
         return round(cost, 6)
 
     def calculate_interaction_cost(
@@ -149,15 +187,31 @@ class RateCardManager:
         stt_audio_s: float | None,
         tts_audio_s: float | None,
         connected_s: float | None,
-        tts_model: str = "bulbul:v3",
+        tts_model: str | None = None,
+        stt_provider: str | None = None,
+        telephony_channel: str | None = None,
     ) -> CostBreakdown:
         llm = self.calculate_llm_cost(model_name, input_tokens, output_tokens)
-        stt = self.calculate_stt_cost(stt_audio_s)
+        stt = self.calculate_stt_cost(stt_audio_s, provider=stt_provider)
         tts = self.calculate_tts_cost(tts_audio_s, model=tts_model)
-        tel = self.calculate_telephony_cost(connected_s)
+        tel = self.calculate_telephony_cost(
+            connected_s, channel=telephony_channel
+        )
 
-        parts = [c for c in [llm, stt, tts, tel] if c is not None]
-        total = round(sum(parts), 6) if parts else None
+        requested_costs = []
+        if input_tokens is not None or output_tokens is not None:
+            requested_costs.append(llm)
+        if stt_audio_s is not None:
+            requested_costs.append(stt)
+        if tts_audio_s is not None:
+            requested_costs.append(tts)
+        if connected_s is not None:
+            requested_costs.append(tel)
+        total = (
+            round(sum(requested_costs), 6)
+            if requested_costs and all(cost is not None for cost in requested_costs)
+            else None
+        )
 
         return CostBreakdown(
             llm_cost=llm,

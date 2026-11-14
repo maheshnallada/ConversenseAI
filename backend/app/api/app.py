@@ -31,6 +31,7 @@ from app.storage.event_repo import EventConflict, EventRepository
 from app.storage.golden_repo import GoldenDatasetRepository
 from app.storage.interaction_errors import InteractionNotFound
 from app.storage.orm import ArtifactRow
+from app.storage.observability_repo import ObservabilityRepository
 from app.storage.review_repo import HumanReviewRepository
 from app.storage.transcript_repo import TranscriptRepository, TranscriptTurnConflict
 from app.storage.timeline_repo import TimelineRepository
@@ -277,6 +278,22 @@ def create_app(session_factory) -> FastAPI:
             raise HTTPException(status_code=404, detail="Interaction not found")
         return found
 
+    @app.get("/api/v1/interactions/{interaction_id}/observability")
+    def get_interaction_observability(
+        interaction_id: str,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        if get_ingest_service().get(tenant_id, interaction_id) is None:
+            raise HTTPException(status_code=404, detail="Interaction not found")
+        metrics = ObservabilityRepository(session_factory).get_metrics(
+            tenant_id, interaction_id
+        )
+        return {
+            "interaction_id": interaction_id,
+            "available": metrics is not None,
+            "metrics": asdict(metrics) if metrics is not None else None,
+        }
+
     # Reconstructed Timeline Endpoint
     @app.get("/api/v1/interactions/{interaction_id}/timeline")
     def get_interaction_timeline(
@@ -431,6 +448,18 @@ def create_app(session_factory) -> FastAPI:
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
         return get_analytics_service().get_overview_analytics(tenant_id)
+
+    @app.get("/api/v1/analytics/reliability")
+    def get_reliability_analytics(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        return get_analytics_service().get_reliability_analytics(tenant_id)
+
+    @app.get("/api/v1/analytics/usage")
+    def get_usage_analytics(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        return get_analytics_service().get_usage_analytics(tenant_id)
 
     @app.get("/api/v1/analytics/quality")
     def get_quality_analytics(

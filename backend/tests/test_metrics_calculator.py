@@ -92,7 +92,7 @@ def test_interaction_metrics_preserve_raw_sequential_latency_samples():
     assert metrics.response_latency_samples == [0.5]
 
 
-def test_root_level_usage_populates_all_usage_metrics():
+def test_root_level_usage_keeps_unpriced_components_unavailable():
     call_data = {
         "usage": {
             "line": {"connected_s": 120.0},
@@ -115,10 +115,10 @@ def test_root_level_usage_populates_all_usage_metrics():
     assert metrics.input_tokens == 100000
     assert metrics.output_tokens == 10000
     assert metrics.cost_breakdown.llm_cost is not None
-    assert metrics.cost_breakdown.stt_cost is not None
+    assert metrics.cost_breakdown.stt_cost is None
     assert metrics.cost_breakdown.tts_cost is not None
-    assert metrics.cost_breakdown.telephony_cost is not None
-    assert metrics.cost_breakdown.total_cost is not None
+    assert metrics.cost_breakdown.telephony_cost is None
+    assert metrics.cost_breakdown.total_cost is None
 
 
 def test_interaction_metrics_reconcile_playback_and_preserve_event_evidence():

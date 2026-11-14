@@ -37,6 +37,7 @@ class InteractionMetrics:
     cost_breakdown: CostBreakdown
     response_latency_samples: list[float] = field(default_factory=list)
     calculation_version: str = "1.0"
+    rate_card_version: str | None = None
     playback_status_counts: dict[str, int] = field(default_factory=dict)
     playback_mismatches: list[dict[str, Any]] = field(default_factory=list)
     playback_review_required: bool = False

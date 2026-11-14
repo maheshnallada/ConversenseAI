@@ -10,6 +10,7 @@ from app.storage.orm import (
     EvaluationBatchRow,
     EvaluationRunRow,
     InteractionTimelineRow,
+    InteractionEventRow,
 )
 from app.observability.calculator import calculate_percentiles
 from app.storage.evaluation_repo import EvaluationRepository
@@ -97,118 +98,207 @@ class AnalyticsService:
 
     def get_overview_analytics(self, tenant_id: str = "health_campaign") -> Dict[str, Any]:
         with self.session_factory() as session:
-            # Interactions count and status
             interactions = session.scalars(
                 select(InteractionRow).where(InteractionRow.tenant_id == tenant_id)
             ).all()
 
-            total_interactions = len(interactions)
-            completed = 0
-            abandoned = 0
-            failed = 0
-            pending = 0
-            unknown = 0
+            status_counts = Counter()
             for i in interactions:
-                try:
-                    payload = json.loads(i.payload_json)
-                    status = payload.get("status") if isinstance(payload, dict) else None
-                except Exception:
-                    status = None
+                payload = json.loads(i.payload_json)
+                status = payload.get("status") if isinstance(payload, dict) else None
+                status_counts[
+                    status
+                    if status in {"completed", "abandoned", "failed", "pending"}
+                    else "unknown"
+                ] += 1
 
-                if status == "completed":
-                    completed += 1
-                elif status == "abandoned":
-                    abandoned += 1
-                elif status == "failed":
-                    failed += 1
-                elif status == "pending":
-                    pending += 1
-                else:
-                    unknown += 1
-
-            # Observability metrics aggregations
             metrics_rows = session.scalars(
-                select(ObservabilityMetricsRow).where(ObservabilityMetricsRow.tenant_id == tenant_id)
+                select(ObservabilityMetricsRow).where(
+                    ObservabilityMetricsRow.tenant_id == tenant_id
+                )
             ).all()
-
-            total_cost, currency, cost_by_currency = aggregate_cost_rows(metrics_rows)
-            avg_cost = (
-                round(total_cost / total_interactions, 4)
-                if total_cost is not None and total_interactions > 0
-                else None
-            )
 
             latency_samples: list[float] = []
             for row in metrics_rows:
-                try:
-                    metrics_data = json.loads(row.metrics_json)
-                    samples = metrics_data.get("response_latency_samples", [])
-                    if isinstance(samples, list):
-                        latency_samples.extend(
-                            sample
-                            for sample in samples
-                            if isinstance(sample, (int, float)) and sample >= 0
-                        )
-                except (TypeError, ValueError):
-                    continue
+                metrics_data = json.loads(row.metrics_json)
+                samples = metrics_data.get("response_latency_samples", [])
+                if isinstance(samples, list):
+                    latency_samples.extend(
+                        sample
+                        for sample in samples
+                        if isinstance(sample, (int, float))
+                        and not isinstance(sample, bool)
+                        and sample >= 0
+                    )
             latency_percentiles = calculate_percentiles(latency_samples)
-            legacy_averages = [
-                row.avg_response_latency_s
+            duration_samples = [
+                row.recording_duration_s
                 for row in metrics_rows
-                if row.avg_response_latency_s is not None
+                if row.recording_duration_s is not None
             ]
-            avg_lat = latency_percentiles.avg
-            if avg_lat is None and legacy_averages:
-                avg_lat = round(sum(legacy_averages) / len(legacy_averages), 3)
-            p95_lat = latency_percentiles.p95
-
-            runs_by_interaction = self._latest_runs(session, tenant_id)
-
-            quality_counts = Counter()
-            compliance_findings = {
-                "PASSED": 0,
-                "FAILED": 0,
-                "REVIEW_REQUIRED": 0,
-                "NOT_EVALUABLE": 0,
-            }
-            successful_outcomes = 0
-
-            for run in runs_by_interaction.values():
-                quality_counts[
-                    run.summary.get("overall_assessment", "Can't tell")
-                ] += 1
-                compliance_findings[self._compliance_status(run)] += 1
-                outcome = self._batch_value(
-                    run,
-                    "conversation_understanding",
-                    "outcome",
-                    "label",
-                )
-                if outcome in ["Expert call booked", "Call later agreed"]:
-                    successful_outcomes += 1
-
-            success_rate = round(successful_outcomes / total_interactions * 100, 1) if total_interactions > 0 else 0.0
 
             return {
-                "total_interactions": total_interactions,
-                "completed_interactions": completed,
-                "abandoned_interactions": abandoned,
-                "failed_interactions": failed,
-                "pending_interactions": pending,
-                "unknown_interactions": unknown,
-                "successful_outcomes": successful_outcomes,
-                "successful_outcomes_percentage": success_rate,
-                "quality_distribution": dict(quality_counts),
-                "compliance_findings": compliance_findings,
-                "avg_latency_s": avg_lat,
-                "p95_latency_s": p95_lat,
-                "total_cost": total_cost,
+                "total_interactions": len(interactions),
+                "interaction_status_counts": dict(status_counts),
+                "metrics_available_interactions": len(metrics_rows),
+                "average_recording_duration_s": (
+                    round(sum(duration_samples) / len(duration_samples), 3)
+                    if duration_samples
+                    else None
+                ),
+                "average_response_latency_s": latency_percentiles.avg,
+                "p95_response_latency_s": latency_percentiles.p95,
+            }
+
+    def get_reliability_analytics(
+        self, tenant_id: str = "health_campaign"
+    ) -> Dict[str, Any]:
+        with self.session_factory() as session:
+            interactions = session.scalars(
+                select(InteractionRow).where(InteractionRow.tenant_id == tenant_id)
+            ).all()
+            status_counts = Counter()
+            for interaction in interactions:
+                payload = json.loads(interaction.payload_json)
+                status = payload.get("status") if isinstance(payload, dict) else None
+                status_counts[
+                    status
+                    if status in {"completed", "abandoned", "failed", "pending"}
+                    else "unknown"
+                ] += 1
+
+            technical_failures = Counter()
+            conversational_failures = Counter()
+            timelines = session.scalars(
+                select(InteractionTimelineRow).where(
+                    InteractionTimelineRow.tenant_id == tenant_id
+                )
+            ).all()
+            interactions_with_failures = set()
+            for timeline in timelines:
+                data = json.loads(timeline.timeline_json)
+                failures = data.get("failures")
+                if isinstance(failures, list):
+                    for failure in failures:
+                        if not isinstance(failure, dict):
+                            continue
+                        category = failure.get("category")
+                        failure_type = failure.get("failure_type")
+                        if not isinstance(failure_type, str):
+                            continue
+                        if category == "technical":
+                            technical_failures[failure_type] += 1
+                            interactions_with_failures.add(timeline.interaction_id)
+                        elif category == "conversational":
+                            conversational_failures[failure_type] += 1
+                            interactions_with_failures.add(timeline.interaction_id)
+                else:
+                    for category, field in (
+                        ("technical", "first_technical_failure"),
+                        ("conversational", "first_conversational_failure"),
+                    ):
+                        failure = data.get(field)
+                        if isinstance(failure, dict) and isinstance(
+                            failure.get("failure_type"), str
+                        ):
+                            target = (
+                                technical_failures
+                                if category == "technical"
+                                else conversational_failures
+                            )
+                            target[failure["failure_type"]] += 1
+                            interactions_with_failures.add(timeline.interaction_id)
+
+            event_failures = Counter()
+            events = session.scalars(
+                select(InteractionEventRow).where(
+                    InteractionEventRow.tenant_id == tenant_id
+                )
+            ).all()
+            for event in events:
+                event_type = event.event_type.lower()
+                if "fail" in event_type or "error" in event_type:
+                    event_failures[event.event_type] += 1
+                    interactions_with_failures.add(event.interaction_id)
+
+            return {
+                "interaction_status_counts": dict(status_counts),
+                "technical_failures": dict(technical_failures),
+                "conversational_failures": dict(conversational_failures),
+                "supplied_event_failures": dict(event_failures),
+                "interactions_with_failures": len(interactions_with_failures),
+            }
+
+    def get_usage_analytics(self, tenant_id: str = "health_campaign") -> Dict[str, Any]:
+        with self.session_factory() as session:
+            metrics_rows = session.scalars(
+                select(ObservabilityMetricsRow).where(
+                    ObservabilityMetricsRow.tenant_id == tenant_id
+                )
+            ).all()
+            batches = session.scalars(
+                select(EvaluationBatchRow).where(
+                    EvaluationBatchRow.tenant_id == tenant_id,
+                    EvaluationBatchRow.status == "completed",
+                )
+            ).all()
+
+            interaction_input = [
+                row.input_tokens for row in metrics_rows if row.input_tokens is not None
+            ]
+            interaction_output = [
+                row.output_tokens for row in metrics_rows if row.output_tokens is not None
+            ]
+            evaluation_input = [
+                batch.input_tokens for batch in batches if batch.input_tokens is not None
+            ]
+            evaluation_output = [
+                batch.output_tokens for batch in batches if batch.output_tokens is not None
+            ]
+
+            input_values = interaction_input + evaluation_input
+            output_values = interaction_output + evaluation_output
+            usage_available = bool(input_values or output_values)
+            total_cost, currency, cost_by_currency = aggregate_cost_rows(metrics_rows)
+            all_costs_available = bool(metrics_rows) and all(
+                row.total_cost is not None for row in metrics_rows
+            )
+            if not all_costs_available:
+                total_cost = None
+                currency = None
+            rate_card_versions = sorted(
+                {
+                    data["rate_card_version"]
+                    for data in (
+                        json.loads(row.metrics_json) for row in metrics_rows
+                    )
+                    if isinstance(data.get("rate_card_version"), str)
+                }
+            )
+
+            return {
+                "usage_available": usage_available,
+                "input_tokens": sum(input_values) if input_values else None,
+                "output_tokens": sum(output_values) if output_values else None,
+                "interaction_input_tokens": (
+                    sum(interaction_input) if interaction_input else None
+                ),
+                "interaction_output_tokens": (
+                    sum(interaction_output) if interaction_output else None
+                ),
+                "evaluation_input_tokens": (
+                    sum(evaluation_input) if evaluation_input else None
+                ),
+                "evaluation_output_tokens": (
+                    sum(evaluation_output) if evaluation_output else None
+                ),
+                "estimated_cost": total_cost,
                 "currency": currency,
                 "cost_by_currency": cost_by_currency,
-                "total_cost_usd": total_cost if currency == "USD" else None,
-                "avg_cost_per_interaction": avg_cost,
-                "avg_cost_per_interaction_usd": avg_cost if currency == "USD" else None,
-                "freshness_status": "UP_TO_DATE",
+                "cost_availability": (
+                    "available" if total_cost is not None else "unavailable"
+                ),
+                "rate_card_versions": rate_card_versions,
             }
 
     def get_quality_analytics(self, tenant_id: str = "health_campaign") -> Dict[str, Any]:

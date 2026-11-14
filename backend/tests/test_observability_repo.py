@@ -1,10 +1,13 @@
 import pytest
+import json
+from sqlalchemy import select
 from sqlalchemy.pool import StaticPool
 
 from app.domain.observability import InteractionMetrics, PercentilesResult
 from app.observability.config import CostBreakdown
 from app.storage.db import create_session_factory, init_db
 from app.storage.observability_repo import ObservabilityRepository
+from app.storage.orm import ObservabilityMetricsRow
 
 
 def _factory():
@@ -62,11 +65,61 @@ def test_save_and_get_metrics():
     assert retrieved.response_latency_percentiles.p50 == 0.9
     assert retrieved.response_latency_samples == []
     assert retrieved.cost_breakdown.total_cost == 0.015
+    assert retrieved.calculation_version == "1.0"
 
     # Test idempotency (re-saving replaces cleanly)
     repo.save_metrics(metrics)
     retrieved2 = repo.get_metrics("tenant_obs", "call_01")
     assert retrieved2 is not None
+
+
+def test_versioned_metrics_reconciliation_round_trip_is_tenant_scoped():
+    repo = ObservabilityRepository(_factory())
+    metrics = _sample_metrics("call_evidence")
+    metrics.calculation_version = "2.1"
+    metrics.rate_card_version = "rate-card-2026-11"
+    metrics.playback_status_counts = {"heard": 1, "mismatch": 1}
+    metrics.playback_mismatches = [
+        {"turn_index": 1, "status": "mismatch", "evidence": "cut vs complete"}
+    ]
+    metrics.playback_review_required = True
+    metrics.timestamp_quality = "partial"
+    metrics.timed_turn_count = 1
+    metrics.timestamp_missing_turn_count = 1
+    metrics.timestamp_invalid_turn_count = 0
+    metrics.unknown_speaker_turn_count = 1
+    metrics.event_types = ["call.completed", "vendor.custom.event"]
+
+    repo.save_metrics(metrics)
+
+    retrieved = repo.get_metrics("tenant_obs", "call_evidence")
+    assert retrieved is not None
+    assert retrieved.calculation_version == "2.1"
+    assert retrieved.rate_card_version == "rate-card-2026-11"
+    assert retrieved.playback_status_counts == {"heard": 1, "mismatch": 1}
+    assert retrieved.playback_mismatches == metrics.playback_mismatches
+    assert retrieved.playback_review_required is True
+    assert retrieved.timestamp_quality == "partial"
+    assert retrieved.timed_turn_count == 1
+    assert retrieved.timestamp_missing_turn_count == 1
+    assert retrieved.unknown_speaker_turn_count == 1
+    assert retrieved.event_types == ["call.completed", "vendor.custom.event"]
+    assert repo.get_metrics("other-tenant", "call_evidence") is None
+    with repo.session_factory() as session:
+        row = session.scalar(
+            select(ObservabilityMetricsRow).where(
+                ObservabilityMetricsRow.tenant_id == "tenant_obs",
+                ObservabilityMetricsRow.interaction_id == "call_evidence",
+            )
+        )
+    assert row is not None
+    payload = json.loads(row.metrics_json)
+    assert payload["units"]["durations"] == "seconds"
+    assert payload["availability"]["provider_usage"] is True
+    assert payload["source_evidence"]["events"] == [
+        "call.completed",
+        "vendor.custom.event",
+    ]
 
 
 def test_platform_summary_aggregation():
@@ -115,6 +168,18 @@ def test_platform_summary_marks_mixed_currency_totals_unavailable():
     assert summary.currency is None
     assert summary.total_cost is None
     assert summary.cost_by_currency == {"USD": 0.01, "EUR": 0.02}
+
+
+def test_platform_summary_marks_incomplete_pricing_unavailable():
+    repo = ObservabilityRepository(_factory())
+    repo.save_metrics(_sample_metrics("call_priced", cost=0.01))
+    repo.save_metrics(_sample_metrics("call_unpriced", cost=None))
+
+    summary = repo.get_platform_summary("tenant_obs")
+
+    assert summary.total_cost is None
+    assert summary.currency is None
+    assert summary.cost_by_currency == {"USD": 0.01}
 
 
 def test_empty_platform_summary_has_no_currency_or_total():
