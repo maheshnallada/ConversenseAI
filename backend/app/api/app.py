@@ -1,23 +1,34 @@
-from typing import Annotated, Optional, List, Dict, Any
-from pathlib import Path
+import base64
+import io
+import json
+import uuid
+import zipfile
 from dataclasses import asdict
+from pathlib import Path
+from typing import Annotated, Any, Dict, List, Optional
+from urllib.parse import unquote, urlparse
 
-from fastapi import FastAPI, Header, HTTPException, Query, Body
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import select
 
+from app.analytics.service import AnalyticsService
+from app.core.logging import TraceLoggingMiddleware, configure_logging, get_logger
 from app.domain.envelope import InteractionEnvelope
+from app.evaluation.service import EvaluationService
 from app.ingestion.errors import IdempotencyConflict
 from app.ingestion.service import IngestResult, IngestionService
-from app.evaluation.service import EvaluationService
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.golden_repo import GoldenDatasetRepository
-from app.storage.timeline_repo import TimelineRepository
+from app.storage.orm import ArtifactRow, InteractionRow
 from app.storage.review_repo import HumanReviewRepository
-from app.validation.golden_loader import load_golden_dataset
+from app.storage.timeline_repo import TimelineRepository
 from app.validation.benchmark import BenchmarkEngine
-from app.analytics.service import AnalyticsService
+from app.validation.golden_loader import load_golden_dataset
+
+logger = get_logger("conversense.api")
 
 
 class IngestResponse(BaseModel):
@@ -27,6 +38,16 @@ class IngestResponse(BaseModel):
 
 class ProcessFolderRequest(BaseModel):
     call_folder_path: str
+    tenant_id: Optional[str] = "health_campaign"
+
+
+class UploadFilesRequest(BaseModel):
+    call_json: str
+    manifest_jsonl: Optional[str] = None
+    agent_manifest_jsonl: Optional[str] = None
+    call_log: Optional[str] = None
+    recording_base64: Optional[str] = None
+    folder_name: Optional[str] = None
     tenant_id: Optional[str] = "health_campaign"
 
 
@@ -44,17 +65,29 @@ class HumanReviewSubmission(BaseModel):
 
 
 def create_app(session_factory) -> FastAPI:
+    configure_logging()
     app = FastAPI(title="Conversense AI - Health Call Observability & Evaluation")
     app.state.session_factory = session_factory
+    app.add_middleware(TraceLoggingMiddleware)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
+        assets_dir = static_dir / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
         @app.get("/")
         @app.get("/dashboard")
         def serve_dashboard():
-            return FileResponse(static_dir / "index.html")
+            return FileResponse(
+                static_dir / "index.html",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
 
     def get_ingest_service() -> IngestionService:
         return IngestionService(session_factory)
@@ -94,6 +127,14 @@ def create_app(session_factory) -> FastAPI:
         status_code = 201 if result.created else 200
         payload = IngestResponse(created=result.created, interaction=result.interaction)
         return JSONResponse(status_code=status_code, content=payload.model_dump(mode="json"))
+
+    # Selector List (For dynamic dropdown population)
+    @app.get("/api/v1/interactions-list")
+    def list_interactions_selector(
+        x_tenant_id: Annotated[str | None, Header()] = None,
+    ):
+        tenant_id = x_tenant_id or "health_campaign"
+        return get_analytics_service().get_interactions_selector_list(tenant_id)
 
     # Interaction List (Paginated & Filterable)
     @app.get("/api/v1/interactions")
@@ -151,27 +192,65 @@ def create_app(session_factory) -> FastAPI:
         x_tenant_id: Annotated[str | None, Header()] = None,
     ):
         tenant_id = x_tenant_id or "health_campaign"
-        root = Path(__file__).resolve().parent.parent.parent.parent
-        calls_dir = root / "data" / "calls"
+        service = get_eval_service()
+        resolved_id = service.resolve_interaction_id(tenant_id, interaction_id)
 
-        # Check if direct folder name or search by UUID inside call.json
         target_wav: Optional[Path] = None
-        if (calls_dir / interaction_id / "recording.wav").exists():
-            target_wav = calls_dir / interaction_id / "recording.wav"
-        else:
-            for folder in calls_dir.iterdir():
-                if folder.is_dir() and (folder / "recording.wav").exists():
-                    c_json = folder / "call.json"
-                    if c_json.exists():
-                        try:
-                            import json
-                            with open(c_json, "r", encoding="utf-8") as f:
-                                data = json.load(f)
-                                if data.get("call_id") == interaction_id:
-                                    target_wav = folder / "recording.wav"
-                                    break
-                        except Exception:
-                            pass
+
+        # 1. Database artifact lookup
+        with session_factory() as session:
+            art_row = session.scalar(
+                select(ArtifactRow).where(
+                    ArtifactRow.tenant_id == tenant_id,
+                    ArtifactRow.interaction_id == resolved_id,
+                    ArtifactRow.artifact_type.in_(["recording", "audio_recording"]),
+                ).limit(1)
+            )
+            if art_row and art_row.uri:
+                parsed = urlparse(art_row.uri)
+                p_str = unquote(parsed.path)
+                if p_str.startswith("/") and ":" in p_str:
+                    p_str = p_str.lstrip("/")
+                candidate = Path(p_str)
+                if candidate.exists():
+                    target_wav = candidate
+
+        # 2. Filesystem search fallback
+        if not target_wav or not target_wav.exists():
+            candidate_roots = [
+                Path("data/calls"),
+                Path(__file__).resolve().parent.parent.parent.parent / "data" / "calls",
+                Path(__file__).resolve().parent.parent.parent / "data" / "calls",
+                Path("/app/data/calls"),
+                Path("backend/storage/artifacts") / tenant_id,
+                Path("/app/storage/artifacts") / tenant_id,
+            ]
+            for root_dir in candidate_roots:
+                if not root_dir.exists():
+                    continue
+
+                for folder_cand in [interaction_id, resolved_id]:
+                    direct = root_dir / folder_cand / "recording.wav"
+                    if direct.exists():
+                        target_wav = direct
+                        break
+                if target_wav:
+                    break
+
+                for folder in root_dir.iterdir():
+                    if folder.is_dir() and (folder / "recording.wav").exists():
+                        c_json = folder / "call.json"
+                        if c_json.exists():
+                            try:
+                                with open(c_json, "r", encoding="utf-8") as f:
+                                    data = json.load(f)
+                                    if data.get("call_id") in [interaction_id, resolved_id]:
+                                        target_wav = folder / "recording.wav"
+                                        break
+                            except Exception:
+                                pass
+                if target_wav:
+                    break
 
         if not target_wav or not target_wav.exists():
             raise HTTPException(status_code=404, detail="Recording audio not found")
@@ -319,7 +398,7 @@ def create_app(session_factory) -> FastAPI:
             {"evaluator_id": "facts.extraction", "family": "facts", "version": "1.0.0", "description": "Structured customer stated facts extraction (policy, city, cover)"},
         ]
 
-    # Process and Evaluate Uploaded Call Folder
+    # Process and Evaluate Folder Endpoint
     @app.post("/api/v1/interactions/process-and-evaluate")
     def process_and_evaluate_folder(
         body: ProcessFolderRequest,
@@ -335,7 +414,133 @@ def create_app(session_factory) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
+            logger.error(f"Error processing folder: {exc}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Ingestion Flow: Binary ZIP Upload Endpoint
+    @app.post("/api/v1/interactions/upload-zip")
+    async def upload_call_zip(
+        request: Request,
+        tenant_id: Optional[str] = Query(default="health_campaign"),
+        x_tenant_id: Annotated[str | None, Header()] = None,
+    ):
+        effective_tenant = x_tenant_id or tenant_id or "health_campaign"
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="Empty request body. Please upload a ZIP archive.")
+
+        upload_id = f"upload_{uuid.uuid4().hex[:12]}"
+        staging_dir = Path("backend/storage/uploads") / upload_id
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(body)) as zf:
+                zf.extractall(staging_dir)
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}")
+
+        # Locate folder containing call.json
+        target_dir = staging_dir
+        if not (target_dir / "call.json").exists():
+            for sub in staging_dir.rglob("call.json"):
+                target_dir = sub.parent
+                break
+
+        if not (target_dir / "call.json").exists():
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded archive must contain 'call.json' metadata file.",
+            )
+
+        try:
+            report = get_eval_service().process_and_evaluate_folder(
+                call_folder_path=target_dir,
+                tenant_id=effective_tenant,
+            )
+            return {
+                "success": True,
+                "message": "Call uploaded, processed, and evaluated successfully.",
+                "report": report,
+            }
+        except Exception as exc:
+            logger.error(f"Error in upload-zip: {exc}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed processing call: {exc}")
+
+    # Ingestion Flow: Multipart/Files JSON Endpoint
+    @app.post("/api/v1/interactions/upload-files")
+    def upload_call_files(
+        body: UploadFilesRequest,
+        x_tenant_id: Annotated[str | None, Header()] = None,
+    ):
+        effective_tenant = x_tenant_id or body.tenant_id or "health_campaign"
+        upload_id = body.folder_name or f"upload_{uuid.uuid4().hex[:12]}"
+        staging_dir = Path("backend/storage/uploads") / upload_id
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        (staging_dir / "call.json").write_text(body.call_json, encoding="utf-8")
+
+        if body.manifest_jsonl:
+            (staging_dir / "manifest.jsonl").write_text(body.manifest_jsonl, encoding="utf-8")
+        if body.agent_manifest_jsonl:
+            (staging_dir / "agent_manifest.jsonl").write_text(body.agent_manifest_jsonl, encoding="utf-8")
+        if body.call_log:
+            (staging_dir / "call.log").write_text(body.call_log, encoding="utf-8")
+        if body.recording_base64:
+            audio_bytes = base64.b64decode(body.recording_base64)
+            (staging_dir / "recording.wav").write_bytes(audio_bytes)
+
+        try:
+            report = get_eval_service().process_and_evaluate_folder(
+                call_folder_path=staging_dir,
+                tenant_id=effective_tenant,
+            )
+            return {
+                "success": True,
+                "message": "Call files uploaded, processed, and evaluated successfully.",
+                "report": report,
+            }
+        except Exception as exc:
+            logger.error(f"Error in upload-files: {exc}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed processing call: {exc}")
+
+    # Seed Dataset Route (Populates calls if running on fresh DB)
+    @app.post("/api/v1/interactions/seed-all")
+    def seed_all_calls(
+        limit: Optional[int] = Query(default=50, ge=1, le=50),
+        x_tenant_id: Annotated[str | None, Header()] = None,
+    ):
+        tenant_id = x_tenant_id or "health_campaign"
+        service = get_eval_service()
+
+        calls_dirs = [
+            Path("data/calls"),
+            Path("/app/data/calls"),
+            Path(__file__).resolve().parent.parent.parent.parent / "data" / "calls",
+            Path(__file__).resolve().parent.parent.parent / "data" / "calls",
+        ]
+        target_dir = None
+        for d in calls_dirs:
+            if d.exists() and d.is_dir():
+                target_dir = d
+                break
+
+        if not target_dir:
+            raise HTTPException(status_code=404, detail="Calls dataset directory not found on server.")
+
+        folders = sorted([f for f in target_dir.iterdir() if f.is_dir() and (f / "call.json").exists()])[:limit]
+        processed = []
+        for folder in folders:
+            try:
+                rep = service.process_and_evaluate_folder(folder, tenant_id=tenant_id)
+                processed.append(rep["interaction_id"])
+            except Exception as e:
+                logger.error(f"Failed seeding {folder.name}: {e}")
+
+        return {
+            "success": True,
+            "seeded_count": len(processed),
+            "interactions": processed,
+        }
 
     # Golden Dataset Routes
     @app.get("/api/v1/golden-dataset")
@@ -361,6 +566,23 @@ def create_app(session_factory) -> FastAPI:
         eval_repo = get_eval_repo()
 
         golden_labels = [l for l in golden_repo.get_all() if not l.call_id.startswith("call_test_")]
+        if not golden_labels:
+            candidate_paths = [
+                Path("data/golden_dataset.csv"),
+                Path(__file__).resolve().parent.parent.parent.parent / "data" / "golden_dataset.csv",
+                Path(__file__).resolve().parent.parent.parent / "data" / "golden_dataset.csv",
+                Path("/app/data/golden_dataset.csv"),
+            ]
+            for p in candidate_paths:
+                if p.exists():
+                    try:
+                        imported = load_golden_dataset(p)
+                        golden_repo.save_many(imported)
+                        golden_labels = [l for l in golden_repo.get_all() if not l.call_id.startswith("call_test_")]
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to auto-import golden dataset from {p}: {e}")
+
         if not golden_labels:
             raise HTTPException(status_code=404, detail="No golden dataset labels loaded.")
 

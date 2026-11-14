@@ -6,3 +6,9 @@ __pycache__/
 storage/artifacts/
 docs/
 data/
+.venv/
+frontend/node_modules/
+backend/storage/uploads/
+.env
+__pycache__/
+.vscode/

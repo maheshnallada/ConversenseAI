@@ -261,13 +261,16 @@ class AnalyticsService:
                     continue
                 if quality and quality.lower() != quality_label.lower():
                     continue
+                folder_name = call_data.get("folder_name")
                 if search:
                     s_low = search.lower()
-                    if s_low not in row.interaction_id.lower():
+                    fname_low = (folder_name or "").lower()
+                    if s_low not in row.interaction_id.lower() and s_low not in fname_low:
                         continue
 
                 items.append({
                     "interaction_id": row.interaction_id,
+                    "folder_name": folder_name,
                     "started_at": started_at,
                     "status": call_status,
                     "duration_s": m.recording_duration_s if m else None,
@@ -300,3 +303,23 @@ class AnalyticsService:
                 "page_size": page_size,
                 "pages": pages,
             }
+
+    def get_interactions_selector_list(self, tenant_id: str = "health_campaign") -> List[Dict[str, Any]]:
+        with self.session_factory() as session:
+            rows = session.scalars(select(InteractionRow).where(InteractionRow.tenant_id == tenant_id)).all()
+            result = []
+            for r in rows:
+                folder_name = None
+                try:
+                    p = json.loads(r.payload_json)
+                    folder_name = p.get("domain_data", {}).get("folder_name")
+                except Exception:
+                    pass
+                display = f"{folder_name} ({r.interaction_id[:8]}...)" if folder_name else f"Call ({r.interaction_id[:8]}...)"
+                result.append({
+                    "interaction_id": r.interaction_id,
+                    "folder_name": folder_name,
+                    "display_name": display,
+                })
+            result.sort(key=lambda x: (x["folder_name"] or x["interaction_id"]))
+            return result

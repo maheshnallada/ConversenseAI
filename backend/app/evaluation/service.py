@@ -50,10 +50,14 @@ class EvaluationService:
 
     def resolve_interaction_id(self, tenant_id: str, identifier: str) -> str:
         """
-        Resolves identifier which might be a call folder name ('call_01')
-        or a UUID interaction_id.
+        Resolves identifier which might be:
+        1. A direct UUID interaction_id (e.g. '01a1aa8a-3987-709c-a600-f2ac13543197')
+        2. A folder name (e.g. 'call_18' or 'call_01')
+        3. A session_id or call_id inside payload_json
+        4. A URI pattern in interaction_artifacts
         """
         with self.session_factory() as session:
+            # 1. Direct match on interaction_id
             direct = session.scalar(
                 select(InteractionRow).where(
                     InteractionRow.tenant_id == tenant_id,
@@ -63,16 +67,53 @@ class EvaluationService:
             if direct:
                 return direct.interaction_id
 
+            # 2. Check by folder_name in domain_data or session_id in payload_json
+            by_payload = session.scalar(
+                select(InteractionRow.interaction_id).where(
+                    InteractionRow.tenant_id == tenant_id,
+                    InteractionRow.payload_json.like(f"%folder_name%{identifier}%"),
+                )
+            )
+            if by_payload:
+                return by_payload
+
+            # 3. Check by URI in interaction_artifacts table
+            by_artifact = session.scalar(
+                select(ArtifactRow.interaction_id).where(
+                    ArtifactRow.tenant_id == tenant_id,
+                    ArtifactRow.uri.like(f"%/{identifier}/%"),
+                ).limit(1)
+            )
+            if by_artifact:
+                return by_artifact
+
+            # Also check artifact uri like '%{identifier}%'
+            by_artifact_alt = session.scalar(
+                select(ArtifactRow.interaction_id).where(
+                    ArtifactRow.tenant_id == tenant_id,
+                    ArtifactRow.uri.like(f"%{identifier}%"),
+                ).limit(1)
+            )
+            if by_artifact_alt:
+                return by_artifact_alt
+
+        # 4. Filesystem fallback if calls directory exists on local host
         if identifier.startswith("call_"):
-            root = Path(__file__).resolve().parent.parent.parent.parent
-            call_json = root / "data" / "calls" / identifier / "call.json"
-            if call_json.exists():
-                try:
-                    with open(call_json, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        return data.get("call_id", identifier)
-                except Exception:
-                    pass
+            for base_dir in [
+                Path("data/calls"),
+                Path(__file__).resolve().parent.parent.parent.parent / "data" / "calls",
+                Path(__file__).resolve().parent.parent.parent / "data" / "calls",
+                Path("/app/data/calls"),
+            ]:
+                call_json = base_dir / identifier / "call.json"
+                if call_json.exists():
+                    try:
+                        with open(call_json, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            if data.get("call_id"):
+                                return data["call_id"]
+                    except Exception:
+                        pass
 
         return identifier
 
@@ -106,6 +147,55 @@ class EvaluationService:
 
         return results
 
+    def _find_call_folder(self, call_folder_path: Path | str) -> Path:
+        raw_str = str(call_folder_path).strip().replace("\\", "/")
+        raw_path = Path(raw_str)
+
+        # 1. Direct path check
+        if raw_path.exists() and raw_path.is_dir():
+            target = raw_path.resolve()
+            if (target / "call.json").exists():
+                return target
+            for sub in target.rglob("call.json"):
+                return sub.parent
+            return target
+
+        # 2. Check across candidate root locations
+        candidate_roots = [
+            Path("."),
+            Path("data/calls"),
+            Path("data"),
+            Path("/app/data/calls"),
+            Path("/app/data"),
+            Path(__file__).resolve().parent.parent.parent.parent / "data" / "calls",
+            Path(__file__).resolve().parent.parent.parent / "data" / "calls",
+            Path("backend/storage/uploads"),
+            Path("/app/backend/storage/uploads"),
+        ]
+
+        cleaned_name = raw_path.name
+        for root in candidate_roots:
+            p1 = (root / raw_str.lstrip("/")).resolve()
+            if p1.exists() and p1.is_dir():
+                if (p1 / "call.json").exists():
+                    return p1
+                for sub in p1.rglob("call.json"):
+                    return sub.parent
+                return p1
+
+            p2 = (root / cleaned_name).resolve()
+            if p2.exists() and p2.is_dir():
+                if (p2 / "call.json").exists():
+                    return p2
+                for sub in p2.rglob("call.json"):
+                    return sub.parent
+                return p2
+
+        raise FileNotFoundError(
+            f"Call folder not found: '{call_folder_path}'. "
+            f"Checked relative to: {[str(r) for r in candidate_roots if r.exists()]}"
+        )
+
     def process_and_evaluate_folder(
         self,
         call_folder_path: Path | str,
@@ -119,9 +209,7 @@ class EvaluationService:
         4. Calculate observability metrics & cost
         5. Run full evaluation suite
         """
-        folder = Path(call_folder_path).resolve()
-        if not folder.exists() or not folder.is_dir():
-            raise FileNotFoundError(f"Call folder not found: {folder}")
+        folder = self._find_call_folder(call_folder_path)
 
         # Step 1: Ingestion
         envelope, artifact_rows, validation = map_call_folder(
