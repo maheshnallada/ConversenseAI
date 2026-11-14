@@ -121,6 +121,7 @@ class BenchmarkEngine:
         # Compute Macro Precision, Recall, F1
         precisions = []
         recalls = []
+        f1_scores = []
 
         for lbl in labels:
             tp = matrix[lbl][lbl]
@@ -129,19 +130,17 @@ class BenchmarkEngine:
 
             p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
             r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
 
             if (tp + fp) > 0:
                 precisions.append(p)
             if (tp + fn) > 0:
                 recalls.append(r)
+            f1_scores.append(f1)
 
         macro_p = round(sum(precisions) / len(precisions), 4) if precisions else 0.0
         macro_r = round(sum(recalls) / len(recalls), 4) if recalls else 0.0
-        macro_f1 = (
-            round(2 * (macro_p * macro_r) / (macro_p + macro_r), 4)
-            if (macro_p + macro_r) > 0
-            else 0.0
-        )
+        macro_f1 = round(sum(f1_scores) / len(f1_scores), 4) if f1_scores else 0.0
 
         scores = MetricScores(
             accuracy=accuracy,
@@ -154,30 +153,40 @@ class BenchmarkEngine:
         return ConfusionMatrix(labels=labels, matrix=matrix), scores
 
     def _extract_outcome(self, eval_list: List[EvaluationResult]) -> str:
+        if not eval_list:
+            return "Can't tell"
         for e in eval_list:
             if e.family == "outcome":
                 return e.details.get("correct_outcome") or e.label or "Can't tell"
         return "Can't tell"
 
     def _extract_what_happened(self, eval_list: List[EvaluationResult]) -> str:
+        if not eval_list:
+            return "Can't tell"
         for e in eval_list:
             if e.family == "outcome":
                 return e.details.get("what_happened") or "Can't tell"
         return "Can't tell"
 
     def _extract_sentiment(self, eval_list: List[EvaluationResult]) -> str:
+        if not eval_list:
+            return "Can't tell"
         for e in eval_list:
             if e.family == "experience":
                 return e.details.get("sentiment") or e.label or "Neutral"
         return "Neutral"
 
     def _extract_emotion(self, eval_list: List[EvaluationResult]) -> str:
+        if not eval_list:
+            return "Can't tell"
         for e in eval_list:
             if e.family == "experience":
                 return e.details.get("emotion") or "Neutral"
         return "Neutral"
 
     def _extract_quality(self, eval_list: List[EvaluationResult]) -> str:
+        if not eval_list:
+            return "Can't tell"
         for e in eval_list:
             if e.family == "quality":
                 return e.details.get("overall_quality") or e.label or "Good"

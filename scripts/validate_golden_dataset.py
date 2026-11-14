@@ -15,6 +15,8 @@ from app.storage.evaluation_repo import EvaluationRepository
 from app.evaluation.service import EvaluationService
 from app.validation.benchmark import BenchmarkEngine
 from app.domain.benchmark import BenchmarkReport
+from app.domain.evaluation import EvaluationResult
+from app.domain.golden import GoldenCallLabel
 
 
 def print_ascii_confusion_matrix(title: str, cm):
@@ -32,7 +34,38 @@ def print_ascii_confusion_matrix(title: str, cm):
     print("-" * len(header))
 
 
-def generate_markdown_report(report: BenchmarkReport, output_path: Path):
+def build_reconciliation_rows(
+    labels: List[GoldenCallLabel],
+    evaluations_by_call: Dict[str, List[EvaluationResult]],
+) -> List[tuple[str, str, str, bool]]:
+    rows = []
+    for label in labels:
+        outcome = next(
+            (evaluation for evaluation in evaluations_by_call.get(label.call_id, [])
+             if evaluation.family == "outcome"),
+            None,
+        )
+        prediction = (
+            outcome.details.get("correct_outcome") or outcome.label or "Can't tell"
+            if outcome
+            else "Can't tell"
+        )
+        rows.append(
+            (
+                label.call_id,
+                label.correct_outcome,
+                prediction,
+                prediction == label.correct_outcome,
+            )
+        )
+    return rows
+
+
+def generate_markdown_report(
+    report: BenchmarkReport,
+    output_path: Path,
+    reconciliation_rows: List[tuple[str, str, str, bool]],
+):
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("# Phase 7: Golden Dataset Validation & Benchmark Report\n\n")
         f.write("## 1. Executive Summary\n")
@@ -65,12 +98,15 @@ def generate_markdown_report(report: BenchmarkReport, output_path: Path):
         f.write(f"- **False Positives (Incorrectly Flagged):** {comp.get('false_positives', 0)}\n")
         f.write(f"- **False Negatives (Missed Violations):** {comp.get('false_negatives', 0)}\n\n")
 
-        f.write("## 5. First-Five Provisional Draft Reconciliation\n")
-        f.write("- `call_01`: Customer repeatedly refused; automated classified as `Not interested` (Matches ground truth).\n")
-        f.write("- `call_02`: Callback agreed for 2026-11-07; automated classified as `Expert call booked` (Matches ground truth).\n")
-        f.write("- `call_03`: Agent substantive question unplayed; automated classified as `No outcome: customer left first` (Matches ground truth).\n")
-        f.write("- `call_04`: Early drop after customer asked identity; automated classified as `No outcome: customer left first` (Matches ground truth).\n")
-        f.write("- `call_05`: Reached booking; automated classified as `Expert call booked` (Matches ground truth).\n")
+        f.write("## 5. Call-Level Outcome Reconciliation\n")
+        if not reconciliation_rows:
+            f.write("No call-level reconciliation data available.\n")
+        for call_id, ground_truth, prediction, matches in reconciliation_rows:
+            match_status = "Matches ground truth" if matches else "Does not match ground truth"
+            f.write(
+                f"- `{call_id}`: Ground truth `{ground_truth}`; "
+                f"prediction `{prediction}` ({match_status}).\n"
+            )
 
 
 def main():
@@ -131,6 +167,7 @@ def main():
     print("Computing benchmark metrics and confusion matrices...")
     engine = BenchmarkEngine()
     report = engine.evaluate_benchmark(labels, evaluations_by_call)
+    reconciliation_rows = build_reconciliation_rows(labels, evaluations_by_call)
 
     # 5. Display Summary
     print("\n" + "=" * 60)
@@ -150,7 +187,8 @@ def main():
 
     # 6. Generate Markdown Report
     report_path = Path(__file__).resolve().parent.parent / "docs" / "PHASE_7_VALIDATION_BENCHMARK.md"
-    generate_markdown_report(report, report_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    generate_markdown_report(report, report_path, reconciliation_rows)
     print(f"\nGenerated benchmark report at: {report_path}")
 
 

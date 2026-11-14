@@ -1,16 +1,15 @@
-from pathlib import Path
+from contextlib import contextmanager
+
 import pytest
-from app.storage.db import create_session_factory, init_db
+from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.exc import IntegrityError
+
 from app.domain.golden import GoldenCallLabel
 from app.storage.golden_repo import GoldenDatasetRepository
 
 @pytest.fixture
-def repo():
-    root = Path(__file__).resolve().parent.parent.parent
-    db_path = root / "backend" / "conversense.sqlite3"
-    factory = create_session_factory(f"sqlite:///{db_path}")
-    init_db(factory)
-    return GoldenDatasetRepository(factory)
+def repo(session_factory):
+    return GoldenDatasetRepository(session_factory)
 
 def test_golden_call_label_save_and_retrieve(repo):
     label = GoldenCallLabel(
@@ -67,4 +66,53 @@ def test_golden_dataset_save_many_and_get_all(repo):
 
     assert "call_test_m1" in call_ids
     assert "call_test_m2" in call_ids
+
+
+def test_save_many_rolls_back_entire_batch_on_invalid_label(repo):
+    valid = GoldenCallLabel(
+        call_id="call_test_atomic_valid",
+        what_happened="Call reached an ending",
+        correct_outcome="Not interested",
+    )
+    invalid = GoldenCallLabel(
+        call_id="call_test_atomic_invalid",
+        what_happened=None,
+        correct_outcome="Not interested",
+    )
+
+    with pytest.raises(IntegrityError):
+        repo.save_many([valid, invalid])
+
+    assert repo.get_by_call_id(valid.call_id) is None
+
+
+@pytest.mark.parametrize("dialect_type", [sqlite.dialect, postgresql.dialect])
+def test_save_many_uses_native_upsert_for_supported_dialects(dialect_type):
+    captured_statements = []
+
+    class FakeSession:
+        def get_bind(self):
+            return type("Bind", (), {"dialect": dialect_type()})()
+
+        def execute(self, statement, values):
+            compiled = str(statement.compile(dialect=dialect_type()))
+            captured_statements.append((compiled, values))
+
+    class FakeSessionFactory:
+        @contextmanager
+        def begin(self):
+            yield FakeSession()
+
+    label = GoldenCallLabel(
+        call_id="call_test_upsert",
+        what_happened="Call reached an ending",
+        correct_outcome="Not interested",
+    )
+
+    GoldenDatasetRepository(FakeSessionFactory()).save_many([label])
+
+    assert len(captured_statements) == 1
+    sql, values = captured_statements[0]
+    assert "ON CONFLICT (call_id) DO UPDATE" in sql
+    assert values[0]["call_id"] == label.call_id
 

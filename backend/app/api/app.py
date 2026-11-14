@@ -159,22 +159,36 @@ def create_app(session_factory) -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/api/v1/golden-dataset")
-    def list_golden_dataset():
+    def list_golden_dataset(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
         labels = get_golden_repo().get_all()
         return [asdict(label) for label in labels]
 
     @app.post("/api/v1/golden-dataset/import")
-    def import_golden_dataset(body: Optional[ImportGoldenRequest] = None):
+    def import_golden_dataset(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+        body: Optional[ImportGoldenRequest] = None,
+    ):
         root = Path(__file__).resolve().parent.parent.parent.parent
-        csv_path = (
-            body.csv_path
-            if body and body.csv_path
-            else str(root / "data" / "golden_dataset.csv")
-        )
+        data_root = (root / "data").resolve()
+        if body and body.csv_path:
+            requested_path = Path(body.csv_path)
+            csv_path = (
+                requested_path if requested_path.is_absolute() else data_root / requested_path
+            )
+        else:
+            csv_path = data_root / "golden_dataset.csv"
+        csv_path = csv_path.resolve()
+        if not csv_path.is_relative_to(data_root):
+            raise HTTPException(
+                status_code=400,
+                detail="csv_path must resolve beneath the approved dataset directory",
+            )
         try:
             labels = load_golden_dataset(csv_path)
             get_golden_repo().save_many(labels)
-            return {"imported": len(labels), "path": csv_path}
+            return {"imported": len(labels), "path": str(csv_path)}
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
