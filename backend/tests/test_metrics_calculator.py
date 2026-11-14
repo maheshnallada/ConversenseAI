@@ -1,4 +1,5 @@
 import pytest
+from app.domain.envelope import InteractionEvent
 from app.domain.transcript import TranscriptTurn
 from app.observability.calculator import (
     calculate_percentiles,
@@ -118,4 +119,157 @@ def test_root_level_usage_populates_all_usage_metrics():
     assert metrics.cost_breakdown.tts_cost is not None
     assert metrics.cost_breakdown.telephony_cost is not None
     assert metrics.cost_breakdown.total_cost is not None
+
+
+def test_interaction_metrics_reconcile_playback_and_preserve_event_evidence():
+    turns = [
+        TranscriptTurn(
+            "heard", "call_19", "ten1", 0, "agent", "Hello", "hello",
+            playback_spoken="heard",
+        ),
+        TranscriptTurn(
+            "cut", "call_19", "ten1", 1, "agent", "Complete line", "complete line",
+            playback_spoken="cut", playback_heard_text="Complete line",
+        ),
+        TranscriptTurn(
+            "not-played", "call_19", "ten1", 2, "agent", "Not played", "not played",
+            playback_spoken="not_played",
+        ),
+        TranscriptTurn(
+            "no-audio", "call_19", "ten1", 3, "agent", "No audio", "no audio",
+            playback_spoken="no_audio",
+        ),
+        TranscriptTurn(
+            "unknown", "call_19", "ten1", 4, "agent", "No playback proof", "no playback proof",
+        ),
+        TranscriptTurn(
+            "speaker-unknown", "call_19", "ten1", 5, "unknown", "Unknown speaker", "unknown speaker",
+        ),
+    ]
+    events = [
+        InteractionEvent(
+            event_id="vendor-event",
+            event_type="vendor.custom.event",
+            payload={"source": "vendor", "sequence": 3},
+        )
+    ]
+
+    metrics = calculate_interaction_metrics(
+        tenant_id="ten1",
+        interaction_id="call_19",
+        call_data={"meta": {}, "models": {}},
+        turns=turns,
+        events=events,
+        calculation_version="2.1",
+        rate_card=RateCardManager(),
+    )
+
+    assert metrics.calculation_version == "2.1"
+    assert metrics.playback_status_counts == {
+        "heard": 1,
+        "mismatch": 1,
+        "not_played": 1,
+        "no_audio": 1,
+        "unknown": 1,
+    }
+    assert metrics.playback_mismatches[0]["turn_index"] == 1
+    assert metrics.playback_review_required is True
+    assert metrics.unknown_speaker_turn_count == 1
+    assert metrics.event_types == ["vendor.custom.event"]
+
+    first_agent_metrics = calculate_interaction_metrics(
+        tenant_id="ten1",
+        interaction_id="call_19",
+        call_data={"meta": {}, "models": {}},
+        turns=[
+            TranscriptTurn(
+                "first-agent",
+                "call_19",
+                "ten1",
+                0,
+                "agent",
+                "Opening",
+                "opening",
+                start_s=4.2,
+                end_s=5.0,
+            )
+        ],
+        rate_card=RateCardManager(),
+    )
+    assert first_agent_metrics.first_agent_latency_s == 4.2
+
+
+def test_metrics_do_not_infer_timing_from_missing_or_invalid_timestamps():
+    turns = [
+        TranscriptTurn(
+            "missing", "call_20", "ten1", 0, "agent", "Hello", "hello",
+        ),
+        TranscriptTurn(
+            "invalid", "call_20", "ten1", 1, "customer", "Hi", "hi",
+            start_s=4.0, end_s=3.0,
+        ),
+    ]
+
+    metrics = calculate_interaction_metrics(
+        tenant_id="ten1",
+        interaction_id="call_20",
+        call_data={"meta": {}, "models": {}},
+        turns=turns,
+        rate_card=RateCardManager(),
+    )
+
+    assert metrics.timestamp_quality == "invalid"
+    assert metrics.timed_turn_count == 0
+    assert metrics.timestamp_missing_turn_count == 1
+    assert metrics.timestamp_invalid_turn_count == 1
+    assert metrics.first_agent_latency_s is None
+    assert metrics.response_latency_samples == []
+    assert metrics.audio_missing is None
+
+
+def test_missing_agent_turns_do_not_prove_audio_is_missing():
+    customer_turn = TranscriptTurn(
+        "customer",
+        "call_21",
+        "ten1",
+        0,
+        "customer",
+        "Hello",
+        "hello",
+    )
+
+    metrics = calculate_interaction_metrics(
+        tenant_id="ten1",
+        interaction_id="call_21",
+        call_data={"meta": {}, "models": {}},
+        turns=[customer_turn],
+        rate_card=RateCardManager(),
+    )
+
+    assert metrics.audio_missing is None
+    assert metrics.audio_silent is None
+
+
+def test_estimated_tokens_are_not_reported_as_provider_usage():
+    metrics = calculate_interaction_metrics(
+        tenant_id="ten1",
+        interaction_id="call_22",
+        call_data={
+            "meta": {
+                "usage": {
+                    "llm": {
+                        "estimated_input_tokens": 25,
+                        "estimated_output_tokens": 10,
+                    }
+                }
+            },
+            "models": {"model": "unpriced-model"},
+        },
+        turns=[],
+        rate_card=RateCardManager(),
+    )
+
+    assert metrics.input_tokens is None
+    assert metrics.output_tokens is None
+    assert metrics.total_tokens is None
 

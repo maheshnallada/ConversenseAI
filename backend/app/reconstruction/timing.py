@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal
+import math
 
 from app.domain.transcript import TranscriptTurn
 
@@ -8,7 +8,7 @@ from app.domain.transcript import TranscriptTurn
 class TurnTimingAnalysis:
     prev_turn_index: int
     next_turn_index: int
-    overlap_s: float
+    overlap_s: float | None
     is_interruption: bool
     interrupter: str | None
     response_latency_s: float | None
@@ -20,24 +20,51 @@ def calculate_overlap(
     t1_end: float | None,
     t2_start: float | None,
     t2_end: float | None,
-) -> float:
-    if t1_start is None or t1_end is None or t2_start is None or t2_end is None:
-        return 0.0
+) -> float | None:
+    if (
+        t1_start is None
+        or t1_end is None
+        or t2_start is None
+        or t2_end is None
+        or not _valid_interval(t1_start, t1_end)
+        or not _valid_interval(t2_start, t2_end)
+    ):
+        return None
     overlap = max(0.0, min(t1_end, t2_end) - max(t1_start, t2_start))
     return round(overlap, 3)
+
+
+def is_valid_turn_timing(turn: TranscriptTurn) -> bool:
+    return _valid_interval(turn.start_s, turn.end_s)
+
+
+def _valid_interval(start: float | None, end: float | None) -> bool:
+    return (
+        isinstance(start, (int, float))
+        and not isinstance(start, bool)
+        and math.isfinite(start)
+        and start >= 0.0
+        and isinstance(end, (int, float))
+        and not isinstance(end, bool)
+        and math.isfinite(end)
+        and end >= start
+    )
 
 
 def calculate_response_latency(
     prev_end: float | None,
     next_start: float | None,
 ) -> float | None:
-    if prev_end is None or next_start is None:
+    if (
+        prev_end is None
+        or next_start is None
+        or not math.isfinite(prev_end)
+        or not math.isfinite(next_start)
+        or prev_end < 0.0
+        or next_start < prev_end
+    ):
         return None
-    diff = next_start - prev_end
-    if diff < 0:
-        # Overlapping turns must not report a negative response latency
-        return None
-    return round(diff, 3)
+    return round(next_start - prev_end, 3)
 
 
 def analyze_turn_pair(
@@ -51,7 +78,7 @@ def analyze_turn_pair(
         next_turn.end_s,
     )
 
-    is_interruption = overlap > 0.0
+    is_interruption = overlap is not None and overlap > 0.0
     interrupter = None
     if is_interruption:
         # If next turn starts while prev turn is still speaking, next turn is the interrupter

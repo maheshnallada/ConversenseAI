@@ -27,8 +27,8 @@ class InteractionMetrics:
     longest_silence_s: float | None
     overlap_count: int
     total_overlap_s: float
-    audio_missing: bool
-    audio_silent: bool
+    audio_missing: bool | None
+    audio_silent: bool | None
     llm_provider: str | None
     llm_model: str | None
     input_tokens: int | None
@@ -36,6 +36,16 @@ class InteractionMetrics:
     total_tokens: int | None
     cost_breakdown: CostBreakdown
     response_latency_samples: list[float] = field(default_factory=list)
+    calculation_version: str = "1.0"
+    playback_status_counts: dict[str, int] = field(default_factory=dict)
+    playback_mismatches: list[dict[str, Any]] = field(default_factory=list)
+    playback_review_required: bool = False
+    timestamp_quality: str = "unknown"
+    timed_turn_count: int = 0
+    timestamp_missing_turn_count: int = 0
+    timestamp_invalid_turn_count: int = 0
+    unknown_speaker_turn_count: int = 0
+    event_types: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -5,6 +5,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.observability.config import RateCardManager
 from app.observability.service import ObservabilityService
+from app.domain.envelope import InteractionEvent
+from app.domain.transcript import TranscriptTurn
 from app.storage.db import create_session_factory, init_db
 from app.storage.orm import ObservabilityMetricsRow
 from app.storage.observability_repo import ObservabilityRepository
@@ -50,4 +52,44 @@ def test_full_dataset_metrics_calculation():
     assert summary.total_output_tokens > 0
     assert summary.total_cost > 0.0
     assert summary.currency == "USD"
+
+
+def test_observability_service_calculates_from_canonical_interaction_inputs():
+    factory = create_session_factory(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    init_db(factory)
+    service = ObservabilityService(factory)
+    turn = TranscriptTurn(
+        turn_id="turn-1",
+        interaction_id="call-canonical",
+        tenant_id="tenant-canonical",
+        turn_index=0,
+        speaker="agent",
+        raw_text="Hello",
+        normalized_text="hello",
+        start_s=0.5,
+        end_s=1.5,
+        playback_spoken="heard",
+    )
+    event = InteractionEvent(
+        event_id="event-1",
+        event_type="call.completed",
+        payload={"status": "completed"},
+    )
+
+    metrics = service.calculate_interaction(
+        tenant_id="tenant-canonical",
+        interaction_id="call-canonical",
+        turns=[turn],
+        events=[event],
+        call_data={"meta": {}, "models": {}},
+        calculation_version="2.1",
+    )
+
+    assert metrics.calculation_version == "2.1"
+    assert metrics.event_types == ["call.completed"]
+    assert metrics.playback_status_counts == {"heard": 1}
 

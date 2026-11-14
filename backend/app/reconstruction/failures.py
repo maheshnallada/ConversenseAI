@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any
 
 from app.domain.transcript import TranscriptTurn
-from app.reconstruction.timing import calculate_overlap
+from app.reconstruction.timing import calculate_overlap, is_valid_turn_timing
 
 
 class FailureCategory(str, Enum):
@@ -25,6 +25,25 @@ class FailureAnalysisResult:
     first_technical_failure: FailureRecord | None = None
     first_conversational_failure: FailureRecord | None = None
     all_failures: list[FailureRecord] = field(default_factory=list)
+    technical_ordering_unknown: bool = False
+    conversational_ordering_unknown: bool = False
+
+
+def select_first_failure(
+    failures: list[FailureRecord],
+) -> tuple[FailureRecord | None, bool]:
+    if not failures:
+        return None, False
+    if len(failures) == 1:
+        return failures[0], False
+
+    if all(failure.time_s is not None for failure in failures):
+        return min(failures, key=lambda failure: failure.time_s), False
+
+    if all(failure.turn_index is not None for failure in failures):
+        return min(failures, key=lambda failure: failure.turn_index), False
+
+    return None, True
 
 
 def detect_failures(
@@ -34,51 +53,57 @@ def detect_failures(
     meta = call_meta or {}
     failures: list[FailureRecord] = []
 
-    agent_turns = [t for t in turns if t.speaker == "agent"]
     agent_wav_count = meta.get("agent_wav_count")
 
-    # 1. NO_AGENT_AUDIO check
-    if agent_wav_count == 0 or len(agent_turns) == 0:
+    if agent_wav_count == 0:
         failures.append(
             FailureRecord(
                 failure_type="NO_AGENT_AUDIO",
                 category=FailureCategory.TECHNICAL,
                 turn_index=None,
                 time_s=0.0,
-                evidence="Call has no agent audio or no agent messages recorded",
+                evidence="Call metadata reports zero agent audio recordings",
             )
         )
 
-    # 2. LATE_AGENT_OPENING check
-    if agent_turns:
-        first_agent = agent_turns[0]
-        if first_agent.start_s is not None and first_agent.start_s > 3.0:
-            failures.append(
-                FailureRecord(
-                    failure_type="LATE_AGENT_OPENING",
-                    category=FailureCategory.TECHNICAL,
-                    turn_index=first_agent.turn_index,
-                    time_s=first_agent.start_s,
-                    evidence=f"First agent words came late at {first_agent.start_s:.2f}s (>3.0s threshold)",
-                )
-            )
-
-    # 3. Turn-by-turn checks
+    # Turn-by-turn checks
     prev_agent_text: str | None = None
 
     for i, t in enumerate(turns):
-        t_time = t.start_s if t.start_s is not None else 0.0
+        t_time = t.start_s if is_valid_turn_timing(t) else None
 
-        # Technical failures on assistant delivery
         if t.speaker == "agent":
-            if t.playback_spoken == "cut":
+            heard_text = t.playback_heard_text
+            complete_cut_text = (
+                t.playback_spoken == "cut"
+                and bool(t.raw_text)
+                and heard_text == t.raw_text
+            )
+            contradictory_no_play = (
+                t.playback_spoken in {"not_played", "no_audio"}
+                and bool(heard_text and heard_text.strip())
+            )
+            if complete_cut_text or contradictory_no_play:
+                failures.append(
+                    FailureRecord(
+                        failure_type="PLAYBACK_METADATA_MISMATCH",
+                        category=FailureCategory.TECHNICAL,
+                        turn_index=t.turn_index,
+                        time_s=t_time,
+                        evidence=(
+                            f"Playback state {t.playback_spoken!r} conflicts with "
+                            f"heard text {heard_text!r}"
+                        ),
+                    )
+                )
+            elif t.playback_spoken == "cut":
                 failures.append(
                     FailureRecord(
                         failure_type="AGENT_PLAYBACK_CUT",
                         category=FailureCategory.TECHNICAL,
                         turn_index=t.turn_index,
                         time_s=t_time,
-                        evidence=f"Agent speech cut during playback; partial heard: '{t.playback_heard_text or ''}'",
+                        evidence=f"Agent speech cut during playback; partial heard: '{heard_text or ''}'",
                     )
                 )
             elif t.playback_spoken == "not_played":
@@ -105,27 +130,29 @@ def detect_failures(
                 )
             prev_agent_text = t.normalized_text
 
-        # Check turn interactions with previous turn
         if i > 0:
             prev = turns[i - 1]
 
-            # Interruption check: customer speaking over agent
             if t.speaker == "customer" and prev.speaker == "agent":
                 overlap = calculate_overlap(prev.start_s, prev.end_s, t.start_s, t.end_s)
-                if overlap > 0.0 or t.barged_in is True:
+                if (overlap is not None and overlap > 0.0) or t.barged_in is True:
+                    evidence = (
+                        f"Customer spoke while agent was speaking (overlap: {overlap:.2f}s)"
+                        if overlap is not None
+                        else "Customer interruption explicitly marked; timing unavailable"
+                    )
                     failures.append(
                         FailureRecord(
                             failure_type="CUSTOMER_INTERRUPTION",
                             category=FailureCategory.CONVERSATIONAL,
                             turn_index=t.turn_index,
                             time_s=t_time,
-                            evidence=f"Customer spoke while agent was speaking (overlap: {overlap:.2f}s)",
+                            evidence=evidence,
                         )
                     )
 
-            # Response delay check
             if t.speaker == "agent" and prev.speaker == "customer":
-                if prev.end_s is not None and t.start_s is not None:
+                if is_valid_turn_timing(prev) and is_valid_turn_timing(t):
                     latency = t.start_s - prev.end_s
                     if latency > 3.0:
                         failures.append(
@@ -138,10 +165,9 @@ def detect_failures(
                             )
                         )
 
-    # 4. Check for customer disconnect if call ended abruptly
     if meta.get("end_reason") == "dropped" and turns:
         last_turn = turns[-1]
-        last_time = last_turn.end_s or last_turn.start_s or 0.0
+        last_time = last_turn.end_s if is_valid_turn_timing(last_turn) else None
         failures.append(
             FailureRecord(
                 failure_type="CUSTOMER_DISCONNECT",
@@ -152,24 +178,16 @@ def detect_failures(
             )
         )
 
-    # Separate earliest technical and conversational failures
     tech_failures = [f for f in failures if f.category == FailureCategory.TECHNICAL]
     conv_failures = [f for f in failures if f.category == FailureCategory.CONVERSATIONAL]
-
-    first_tech = (
-        min(tech_failures, key=lambda f: f.time_s if f.time_s is not None else 999999.0)
-        if tech_failures
-        else None
-    )
-    first_conv = (
-        min(conv_failures, key=lambda f: f.time_s if f.time_s is not None else 999999.0)
-        if conv_failures
-        else None
-    )
+    first_tech, technical_ordering_unknown = select_first_failure(tech_failures)
+    first_conv, conversational_ordering_unknown = select_first_failure(conv_failures)
 
     return FailureAnalysisResult(
         first_technical_failure=first_tech,
         first_conversational_failure=first_conv,
         all_failures=failures,
+        technical_ordering_unknown=technical_ordering_unknown,
+        conversational_ordering_unknown=conversational_ordering_unknown,
     )
 

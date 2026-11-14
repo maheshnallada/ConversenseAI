@@ -64,6 +64,16 @@ def test_classify_mismatch():
     assert res.status == "mismatch"
 
 
+def test_cut_with_complete_heard_text_is_a_reviewable_mismatch():
+    turn = _turn(spoken="cut", heard_text="Sample", raw_text="Sample")
+
+    res = classify_delivery(turn)
+
+    assert res.status == "mismatch"
+    assert res.requires_review is True
+    assert res.was_heard is None
+
+
 def test_classify_customer_turn():
     turn = _turn(speaker="customer")
     res = classify_delivery(turn)

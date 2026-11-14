@@ -61,7 +61,11 @@ def test_missing_timestamps_handled_gracefully():
     t2 = _turn(1, "agent", 1.0, 2.0)
 
     analysis = analyze_turn_pair(t1, t2)
-    assert analysis.overlap_s == 0.0
+    assert analysis.overlap_s is None
     assert analysis.is_interruption is False
     assert analysis.response_latency_s is None
+
+
+def test_invalid_timestamp_interval_is_unavailable():
+    assert calculate_overlap(2.0, 1.0, 3.0, 4.0) is None
 
