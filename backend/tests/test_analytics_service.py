@@ -1,6 +1,5 @@
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 import pytest
 from sqlalchemy import text
 from app.storage.db import create_session_factory, init_db
@@ -105,17 +104,37 @@ def _evaluation_run(
     )
 
 
-def _cost_metrics(interaction_id, currency, cost):
+def _cost_metrics(
+    interaction_id,
+    currency,
+    cost,
+    tenant_id="tenant_cost",
+    latency=None,
+    telephony_cost=None,
+    input_tokens=None,
+    output_tokens=None,
+):
+    percentiles = (
+        PercentilesResult(
+            avg=latency,
+            p50=latency,
+            p90=latency,
+            p95=latency,
+            p99=latency,
+        )
+        if latency is not None
+        else PercentilesResult()
+    )
     return InteractionMetrics(
-        tenant_id="tenant_cost",
+        tenant_id=tenant_id,
         interaction_id=interaction_id,
         recording_duration_s=None,
         telephony_duration_s=None,
         turn_count=0,
         agent_turn_count=0,
         customer_turn_count=0,
-        first_agent_latency_s=None,
-        response_latency_percentiles=PercentilesResult(),
+        first_agent_latency_s=latency,
+        response_latency_percentiles=percentiles,
         longest_silence_s=None,
         overlap_count=0,
         total_overlap_s=0.0,
@@ -123,31 +142,58 @@ def _cost_metrics(interaction_id, currency, cost):
         audio_silent=False,
         llm_provider=None,
         llm_model=None,
-        input_tokens=None,
-        output_tokens=None,
-        total_tokens=None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=(
+            input_tokens + output_tokens
+            if input_tokens is not None and output_tokens is not None
+            else None
+        ),
         cost_breakdown=CostBreakdown(
             llm_cost=cost,
             stt_cost=None,
             tts_cost=None,
-            telephony_cost=None,
-            total_cost=cost,
+            telephony_cost=telephony_cost,
+            total_cost=cost + (telephony_cost or 0),
             currency=currency,
         ),
     )
 
 @pytest.fixture
 def analytics_service():
-    root = Path(__file__).resolve().parent.parent.parent
-    db_path = root / "backend" / "conversense.sqlite3"
-    factory = create_session_factory(f"sqlite:///{db_path}")
-    init_db(factory)
-    return AnalyticsService(factory)
+    service, factory = _isolated_service()
+    now = datetime.now(timezone.utc)
+    with factory.begin() as session:
+        session.add(_interaction("health_campaign", "call_01", "completed"))
+    EvaluationRepository(factory).save_run(
+        _evaluation_run(
+            "health_campaign",
+            "call_01",
+            "run-call-01",
+            now,
+            "Good",
+            "Expert call booked",
+            "NOT_DETECTED",
+        )
+    )
+    ObservabilityRepository(factory).save_metrics(
+        _cost_metrics(
+            "call_01",
+            "USD",
+            0.02,
+            tenant_id="health_campaign",
+            latency=0.4,
+            telephony_cost=0.01,
+            input_tokens=12,
+            output_tokens=8,
+        )
+    )
+    return service
 
 def test_overview_analytics(analytics_service):
     overview = analytics_service.get_overview_analytics(tenant_id="health_campaign")
 
-    assert overview["total_interactions"] == 50
+    assert overview["total_interactions"] == 1
     assert overview["completed_interactions"] >= 0
     assert overview["abandoned_interactions"] >= 0
     assert "quality_distribution" in overview
@@ -162,7 +208,7 @@ def test_quality_analytics(analytics_service):
     assert "sentiment" in quality
     assert "emotion" in quality
     assert "overall_quality" in quality
-    assert sum(quality["overall_quality"].values()) == 50
+    assert sum(quality["overall_quality"].values()) == 1
 
 def test_cost_analytics(analytics_service):
     cost = analytics_service.get_cost_analytics(tenant_id="health_campaign")
@@ -175,10 +221,10 @@ def test_cost_analytics(analytics_service):
 def test_interactions_page_pagination(analytics_service):
     page1 = analytics_service.get_interactions_page(tenant_id="health_campaign", page=1, page_size=10)
 
-    assert page1["total"] == 50
-    assert len(page1["items"]) == 10
+    assert page1["total"] == 1
+    assert len(page1["items"]) == 1
     assert page1["page"] == 1
-    assert page1["pages"] == 5
+    assert page1["pages"] == 1
 
     first = page1["items"][0]
     assert "interaction_id" in first

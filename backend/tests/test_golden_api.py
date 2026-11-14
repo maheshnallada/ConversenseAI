@@ -1,19 +1,12 @@
 from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
-from app.storage.db import create_session_factory, init_db
 from app.api.app import create_app
 import app.api.app as api_module
-from app.storage.golden_repo import GoldenDatasetRepository
-from app.domain.golden import GoldenCallLabel
 
 @pytest.fixture
-def test_app():
-    root = Path(__file__).resolve().parent.parent.parent
-    db_path = root / "backend" / "conversense.sqlite3"
-    factory = create_session_factory(f"sqlite:///{db_path}")
-    init_db(factory)
-    return create_app(factory)
+def test_app(session_factory):
+    return create_app(session_factory)
 
 def test_golden_api_routes_registered(test_app):
     routes = [r.path for r in test_app.routes]

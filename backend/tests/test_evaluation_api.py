@@ -1,4 +1,3 @@
-from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import text
@@ -8,16 +7,11 @@ from app.api.app import (
     HumanReviewSubmission,
 )
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
-from app.storage.db import create_session_factory, init_db
 from app.storage.evaluation_repo import EvaluationRepository
 
 @pytest.fixture
-def test_app():
-    root = Path(__file__).resolve().parent.parent.parent
-    db_path = root / "backend" / "conversense.sqlite3"
-    factory = create_session_factory(f"sqlite:///{db_path}")
-    init_db(factory)
-    return create_app(factory)
+def test_app(session_factory):
+    return create_app(session_factory)
 
 
 def _run(run_id, started_at, batch_status="completed"):

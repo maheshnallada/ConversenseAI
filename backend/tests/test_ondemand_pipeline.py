@@ -1,21 +1,11 @@
 from pathlib import Path
 from datetime import datetime, timezone
-import pytest
-from app.storage.db import create_session_factory, init_db
 from app.evaluation.service import EvaluationService
 from app.domain.envelope import InteractionEnvelope
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.ingestion.service import IngestionService
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.orm import InteractionRow
-
-@pytest.fixture
-def db_session_factory():
-    root = Path(__file__).resolve().parent.parent.parent
-    db_path = root / "backend" / "conversense.sqlite3"
-    factory = create_session_factory(f"sqlite:///{db_path}")
-    init_db(factory)
-    return factory
 
 def test_on_demand_evaluation_existing_call(session_factory):
     envelope = InteractionEnvelope(
@@ -97,8 +87,8 @@ def test_on_demand_evaluation_existing_call(session_factory):
     assert saved.run_id == run.run_id
     assert len(saved.batches) == 3
 
-def test_on_demand_pipeline_new_call_folder(db_session_factory):
-    eval_service = EvaluationService(session_factory=db_session_factory)
+def test_on_demand_pipeline_new_call_folder(session_factory):
+    eval_service = EvaluationService(session_factory=session_factory)
     root = Path(__file__).resolve().parent.parent.parent
     call_folder = root / "backend" / "storage" / "artifacts" / "health_campaign" / "call_03"
 
@@ -114,7 +104,7 @@ def test_on_demand_pipeline_new_call_folder(db_session_factory):
     assert report["evaluations_count"] == 3
     assert "evaluations" in report
 
-    ingestion_service = IngestionService(db_session_factory)
+    ingestion_service = IngestionService(session_factory)
     assert ingestion_service.outbox_count("health_campaign", report["interaction_id"]) == 1
 
     eval_service.process_and_evaluate_folder(

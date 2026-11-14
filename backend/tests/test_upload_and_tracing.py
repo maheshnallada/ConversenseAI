@@ -3,6 +3,7 @@ import json
 import logging
 import shutil
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -15,14 +16,20 @@ from starlette.requests import Request
 from app.api.app import UploadFilesRequest, create_app
 import app.api.app as api_module
 from app.core.logging import StructuredJsonFormatter, TraceLoggingMiddleware, configure_logging, get_logger
+from app.domain.envelope import InteractionEnvelope
+from app.domain.timeline import ReconstructedTimeline, TimelineEvent
 from app.storage.db import create_session_factory, init_db
+from app.storage.orm import ArtifactRow, InteractionRow
+from app.storage.timeline_repo import TimelineRepository
 
 
 @pytest.fixture
 def app_and_factory():
-    root = Path(__file__).resolve().parent.parent.parent
-    db_path = root / "backend" / "conversense.sqlite3"
-    factory = create_session_factory(f"sqlite:///{db_path}")
+    factory = create_session_factory(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     init_db(factory)
     app = create_app(factory)
     return app, factory
@@ -58,29 +65,92 @@ def test_structured_logging_formatter():
 
 
 def test_interactions_list_selector_route(app_and_factory):
-    app, _ = app_and_factory
+    app, factory = app_and_factory
+    _insert_interaction(factory, "call_18", folder_name="call_18")
     route = next(r for r in app.routes if r.path == "/api/v1/interactions-list")
     items = route.endpoint(tenant_id="health_campaign")
-    assert len(items) >= 50
-    assert any(i["folder_name"] == "call_18" for i in items)
-    assert any(i["folder_name"] == "call_01" for i in items)
+    assert len(items) == 1
+    assert items[0]["folder_name"] == "call_18"
 
 
-def test_call_18_timeline_and_audio_resolution(app_and_factory):
-    app, _ = app_and_factory
+def _insert_interaction(factory, interaction_id, folder_name=None):
+    domain_data = {"folder_name": folder_name} if folder_name else {}
+    envelope = InteractionEnvelope(
+        tenant_id="health_campaign",
+        interaction_id=interaction_id,
+        schema_version="1.0",
+        domain_data=domain_data,
+    )
+    with factory.begin() as session:
+        session.add(
+            InteractionRow(
+                tenant_id=envelope.tenant_id,
+                interaction_id=envelope.interaction_id,
+                schema_version=envelope.schema_version,
+                payload_json=envelope.model_dump_json(),
+                payload_hash=interaction_id,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+    return envelope
 
-    # Verify timeline does not 404 for call_18
+
+def test_timeline_and_audio_resolve_for_persisted_interaction(
+    app_and_factory, tmp_path
+):
+    app, factory = app_and_factory
+    envelope = _insert_interaction(factory, "call_18")
+    now = datetime.now(timezone.utc)
+    TimelineRepository(factory).save_timeline(
+        ReconstructedTimeline(
+            tenant_id=envelope.tenant_id,
+            interaction_id=envelope.interaction_id,
+            total_duration_s=12.0,
+            agent_turn_count=1,
+            customer_turn_count=1,
+            overlap_count=0,
+            total_overlap_s=0.0,
+            events=[
+                TimelineEvent(
+                    event_id="turn-1",
+                    event_type="turn",
+                    speaker="agent",
+                    start_s=0.0,
+                    end_s=2.0,
+                    text="Hello",
+                )
+            ],
+        )
+    )
+    recording = tmp_path / "recording.wav"
+    recording.write_bytes(b"wav-data")
+    with factory.begin() as session:
+        session.add(
+            ArtifactRow(
+                tenant_id=envelope.tenant_id,
+                interaction_id=envelope.interaction_id,
+                artifact_id="recording-1",
+                artifact_type="recording",
+                uri=recording.as_uri(),
+                media_type="audio/wav",
+                sha256="test-hash",
+                byte_size=recording.stat().st_size,
+                source_path=str(recording),
+                validation_status="valid",
+                created_at=now,
+            )
+        )
+
     timeline_route = next(r for r in app.routes if r.path == "/api/v1/interactions/{interaction_id}/timeline")
     timeline = timeline_route.endpoint(interaction_id="call_18", tenant_id="health_campaign")
     assert timeline is not None
     assert len(timeline["events"]) > 0
     assert timeline["total_duration_s"] > 0
 
-    # Verify audio streaming endpoint resolves file for call_18
     audio_route = next(r for r in app.routes if r.path == "/api/v1/interactions/{interaction_id}/audio")
     audio = audio_route.endpoint(interaction_id="call_18", tenant_id="health_campaign")
     assert audio is not None
-    assert Path(audio.path).exists()
+    assert Path(audio.path) == recording
 
 
 def test_find_call_folder_variants(app_and_factory):
@@ -145,7 +215,7 @@ def test_upload_files_rejects_folder_name_that_escapes_staging(
 
 
 def test_upload_files_json_endpoint(app_and_factory):
-    app, factory = app_and_factory
+    app, _ = app_and_factory
     route = next(r for r in app.routes if r.path == "/api/v1/interactions/upload-files")
 
     test_tenant = "test_upload_tenant"
@@ -178,12 +248,4 @@ def test_upload_files_json_endpoint(app_and_factory):
             "compliance_appointment",
         }
     finally:
-        with factory() as session:
-            from sqlalchemy import text
-            session.execute(text("DELETE FROM interactions WHERE tenant_id = 'test_upload_tenant'"))
-            session.execute(text("DELETE FROM evaluation_results WHERE tenant_id = 'test_upload_tenant'"))
-            session.execute(text("DELETE FROM interaction_timelines WHERE tenant_id = 'test_upload_tenant'"))
-            session.execute(text("DELETE FROM interaction_turns WHERE tenant_id = 'test_upload_tenant'"))
-            session.execute(text("DELETE FROM observability_metrics WHERE tenant_id = 'test_upload_tenant'"))
-            session.commit()
         shutil.rmtree(staging_dir, ignore_errors=True)
