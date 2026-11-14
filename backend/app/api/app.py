@@ -18,14 +18,21 @@ from sqlalchemy import select
 
 from app.analytics.service import AnalyticsService
 from app.core.logging import TraceLoggingMiddleware, configure_logging, get_logger
-from app.domain.envelope import InteractionEnvelope
+from app.domain.envelope import ArtifactReference, InteractionEnvelope, InteractionEvent
 from app.evaluation.service import EvaluationService
 from app.ingestion.errors import IdempotencyConflict
 from app.ingestion.service import IngestResult, IngestionService
+from app.storage.artifact_reference_repo import (
+    ArtifactReferenceConflict,
+    ArtifactReferenceRepository,
+)
 from app.storage.evaluation_repo import EvaluationRepository
+from app.storage.event_repo import EventConflict, EventRepository
 from app.storage.golden_repo import GoldenDatasetRepository
+from app.storage.interaction_errors import InteractionNotFound
 from app.storage.orm import ArtifactRow
 from app.storage.review_repo import HumanReviewRepository
+from app.storage.transcript_repo import TranscriptRepository, TranscriptTurnConflict
 from app.storage.timeline_repo import TimelineRepository
 from app.validation.benchmark import BenchmarkEngine
 from app.validation.golden_loader import load_golden_dataset
@@ -163,6 +170,72 @@ def create_app(session_factory) -> FastAPI:
         status_code = 201 if result.created else 200
         payload = IngestResponse(created=result.created, interaction=result.interaction)
         return JSONResponse(status_code=status_code, content=payload.model_dump(mode="json"))
+
+    @app.post("/api/v1/interactions/{interaction_id}/events")
+    def append_interaction_event(
+        interaction_id: str,
+        body: InteractionEvent,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        if get_ingest_service().get(tenant_id, interaction_id) is None:
+            raise HTTPException(status_code=404, detail="Interaction not found")
+
+        transcript_turn = None
+        if body.event_type == "transcript.turn":
+            try:
+                transcript_turn = TranscriptRepository.event_turn(
+                    tenant_id, interaction_id, body
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        try:
+            created = EventRepository(session_factory).append(
+                tenant_id,
+                interaction_id,
+                body,
+                transcript_turn=transcript_turn,
+            )
+        except InteractionNotFound as exc:
+            raise HTTPException(status_code=404, detail="Interaction not found") from exc
+        except (EventConflict, TranscriptTurnConflict) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        response = {
+            "created": created,
+            "event": body.model_dump(mode="json"),
+        }
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content=response,
+        )
+
+    @app.post("/api/v1/interactions/{interaction_id}/artifacts")
+    def register_interaction_artifact(
+        interaction_id: str,
+        body: ArtifactReference,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        if get_ingest_service().get(tenant_id, interaction_id) is None:
+            raise HTTPException(status_code=404, detail="Interaction not found")
+
+        try:
+            created = ArtifactReferenceRepository(session_factory).register(
+                tenant_id, interaction_id, body
+            )
+        except InteractionNotFound as exc:
+            raise HTTPException(status_code=404, detail="Interaction not found") from exc
+        except ArtifactReferenceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        response = {
+            "created": created,
+            "artifact": body.model_dump(mode="json"),
+        }
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content=response,
+        )
 
     # Selector List (For dynamic dropdown population)
     @app.get("/api/v1/interactions-list")

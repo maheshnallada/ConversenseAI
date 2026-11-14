@@ -1,5 +1,9 @@
 from pathlib import Path
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from app.api.app import create_app
 from app.storage.artifacts import LocalArtifactStore, StoredArtifact
 
 
@@ -80,5 +84,60 @@ def test_readonly_filesystem_fallback(tmp_path: Path, monkeypatch):
     assert stored.artifact_id is not None
     assert store.exists(stored.uri) is True
     assert Path(store.get_path(stored.uri)).exists()
+
+
+def test_artifact_reference_registration_keeps_optional_metadata_null(
+    session_factory,
+):
+    client = TestClient(create_app(session_factory))
+    interaction = client.post(
+        "/api/v1/interactions",
+        headers={"X-Tenant-Id": "tenant-a"},
+        json={
+            "tenant_id": "tenant-a",
+            "interaction_id": "call-1",
+            "schema_version": "1.0",
+        },
+    )
+    assert interaction.status_code == 201
+
+    response = client.post(
+        "/api/v1/interactions/call-1/artifacts",
+        headers={"X-Tenant-Id": "tenant-a"},
+        json={"artifact_id": "recording-1", "artifact_type": "recording"},
+    )
+    other_tenant = client.post(
+        "/api/v1/interactions/call-1/artifacts",
+        headers={"X-Tenant-Id": "tenant-b"},
+        json={"artifact_id": "recording-2", "artifact_type": "recording"},
+    )
+    missing_tenant = client.post(
+        "/api/v1/interactions/call-1/artifacts",
+        json={"artifact_id": "recording-3", "artifact_type": "recording"},
+    )
+    missing_interaction = client.post(
+        "/api/v1/interactions/missing/artifacts",
+        headers={"X-Tenant-Id": "tenant-a"},
+        json={"artifact_id": "recording-4", "artifact_type": "recording"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["created"] is True
+    assert other_tenant.status_code == 404
+    assert missing_tenant.status_code == 401
+    assert missing_interaction.status_code == 404
+    with session_factory() as session:
+        row = session.execute(
+            text(
+                "SELECT artifact_type, uri, media_type, sha256 "
+                "FROM interaction_artifact_references "
+                "WHERE tenant_id = 'tenant-a' AND interaction_id = 'call-1' "
+                "AND artifact_id = 'recording-1'"
+            )
+        ).one()
+    assert row.artifact_type == "recording"
+    assert row.uri is None
+    assert row.media_type is None
+    assert row.sha256 is None
 
 
