@@ -23,8 +23,8 @@ def test_section_11_routes_exist(app_instance):
     assert "/api/v1/interactions/{interaction_id}/timeline" in routes
     assert "/api/v1/interactions/{interaction_id}/audio" in routes
     assert "/api/v1/interactions/{interaction_id}/reviews" in routes
-    assert "/api/v1/use-cases" in routes
-    assert "/api/v1/evaluators" in routes
+    assert "/api/v1/use-cases" not in routes
+    assert "/api/v1/evaluators" not in routes
 
 def test_route_handlers_logic(app_instance):
     # Verify overview analytics handler

@@ -7,7 +7,6 @@ import InteractionsView from './views/InteractionsView';
 import DrillDownView from './views/DrillDownView';
 import IngestView from './views/IngestView';
 import BenchmarkView from './views/BenchmarkView';
-import EvaluatorsView from './views/EvaluatorsView';
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -83,7 +82,6 @@ function AppContent() {
               <IngestView onNavigateToDrillDown={handleInspectCall} />
             )}
             {activeTab === 'benchmark' && <BenchmarkView />}
-            {activeTab === 'evaluators' && <EvaluatorsView />}
           </div>
         </main>
       </div>

@@ -5,7 +5,6 @@ import {
   Search,
   UploadCloud,
   Award,
-  Sliders,
   X,
   ChevronLeft,
   ChevronRight,
@@ -19,7 +18,6 @@ const NAV_ITEMS = [
   { id: 'drilldown', label: 'Call Drill-Down', icon: Search },
   { id: 'ingest', label: 'Ingest & Evaluate', icon: UploadCloud },
   { id: 'benchmark', label: 'Golden Benchmark', icon: Award },
-  { id: 'evaluators', label: 'Evaluators & Config', icon: Sliders },
 ];
 
 export default function Sidebar({

@@ -1,25 +1,46 @@
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 import pytest
 
 from app.domain.benchmark import BenchmarkReport
-from app.domain.evaluation import EvaluationResult
+from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.domain.golden import GoldenCallLabel
 from scripts import validate_golden_dataset
 
 
-def _outcome_evaluation(call_id: str, outcome: str) -> EvaluationResult:
-    return EvaluationResult(
+def _outcome_run(call_id: str, outcome: str) -> EvaluationRun:
+    now = datetime.now(timezone.utc)
+    batch = EvaluationBatchRecord(
+        evaluation_id=f"batch-{call_id}",
+        batch_name="conversation_understanding",
+        status="completed",
+        model="test-model",
+        prompt_version="1",
+        schema_version="1",
+        started_at=now,
+        completed_at=now,
+        input_tokens=1,
+        output_tokens=1,
+        raw_output="{}",
+        parsed_output={"outcome": {"label": outcome}},
+        validation={"schema_valid": True, "evidence_valid": True},
+        review_required=False,
+        review_status="not_required",
+        review_reasons=[],
+    )
+    return EvaluationRun(
+        run_id=f"run-{call_id}",
         tenant_id="tenant",
         interaction_id=call_id,
-        evaluator_id="outcome",
-        evaluator_version="1",
-        family="outcome",
-        method="deterministic",
-        label=None,
-        details={"correct_outcome": outcome},
+        batches=[batch],
+        summary={"overall_assessment": "Good"},
+        started_at=now,
+        completed_at=now,
+        review_required=False,
+        review_reasons=[],
     )
 
 
@@ -36,7 +57,7 @@ def test_report_reconciliations_reflect_actual_predictions(tmp_path: Path) -> No
             correct_outcome="Voicemail",
         ),
     ]
-    evaluations = {"call_01": [_outcome_evaluation("call_01", "Expert call booked")]}
+    evaluations = {"call_01": _outcome_run("call_01", "Expert call booked")}
     report_path = tmp_path / "report.md"
 
     try:
@@ -59,7 +80,7 @@ def test_report_reconciliations_reflect_actual_predictions(tmp_path: Path) -> No
 
 
 def test_main_creates_report_parent_directory(tmp_path: Path, monkeypatch) -> None:
-    report_path = tmp_path / "docs" / "PHASE_7_VALIDATION_BENCHMARK.md"
+    report_path = tmp_path / "docs" / "GOLDEN_DATASET_BENCHMARK.md"
     monkeypatch.setattr(
         validate_golden_dataset,
         "__file__",
@@ -68,8 +89,16 @@ def test_main_creates_report_parent_directory(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(sys, "argv", ["validate_golden_dataset"])
     monkeypatch.setattr(validate_golden_dataset, "create_session_factory", lambda _url: object())
     monkeypatch.setattr(validate_golden_dataset, "init_db", lambda _factory: None)
-    monkeypatch.setattr(validate_golden_dataset, "load_golden_dataset", lambda _path: [])
-    monkeypatch.setattr(validate_golden_dataset, "load_reply_wait_checks", lambda _path: [])
+    labels = [
+        GoldenCallLabel(
+            call_id="call_01",
+            what_happened="Call reached an ending",
+            correct_outcome="Expert call booked",
+        )
+    ]
+    monkeypatch.setattr(
+        validate_golden_dataset, "load_golden_dataset", lambda _path: labels
+    )
     monkeypatch.setattr(
         validate_golden_dataset,
         "GoldenDatasetRepository",
@@ -78,12 +107,18 @@ def test_main_creates_report_parent_directory(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(
         validate_golden_dataset,
         "EvaluationService",
-        lambda _factory: SimpleNamespace(),
+        lambda _factory: SimpleNamespace(
+            resolve_interaction_id=lambda _tenant_id, call_id: call_id
+        ),
     )
     monkeypatch.setattr(
         validate_golden_dataset,
         "EvaluationRepository",
-        lambda _factory: SimpleNamespace(),
+        lambda _factory: SimpleNamespace(
+            get_latest_run=lambda _tenant_id, call_id: _outcome_run(
+                call_id, "Expert call booked"
+            )
+        ),
     )
 
     try:
@@ -92,3 +127,4 @@ def test_main_creates_report_parent_directory(tmp_path: Path, monkeypatch) -> No
         pytest.fail(f"main must create the report directory before writing: {exc}")
 
     assert report_path.is_file()
+    assert "prediction `Expert call booked`" in report_path.read_text(encoding="utf-8")

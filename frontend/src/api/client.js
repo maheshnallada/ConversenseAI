@@ -122,7 +122,7 @@ export const api = {
       headers: { 'X-Tenant-Id': tenant },
     }),
 
-  // Benchmark & Evaluators
+  // Benchmark
   getBenchmark: (tenant = 'health_campaign') =>
     request('/golden-dataset/benchmark', { headers: { 'X-Tenant-Id': tenant } }),
 
@@ -133,9 +133,4 @@ export const api = {
       body: csvPath ? JSON.stringify({ csv_path: csvPath }) : undefined,
     }),
 
-  getEvaluators: () =>
-    request('/evaluators'),
-
-  getUseCases: () =>
-    request('/use-cases'),
 };

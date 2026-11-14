@@ -23,10 +23,6 @@ const TITLES = {
     title: 'Golden Dataset Benchmark Validation',
     subtitle: 'Evaluate automated compliance and outcome decisions against human ground-truth labels across all calls.',
   },
-  evaluators: {
-    title: 'Evaluators & Model Gateway Configuration',
-    subtitle: 'Active never-rule compliance safety policies, LLM rate cards, and dynamic model routing.',
-  },
 };
 
 export default function Topbar({

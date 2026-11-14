@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.domain.envelope import InteractionEnvelope
-from app.domain.evaluation import EvaluationBatchRecord, EvaluationResult, EvaluationRun
+from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.evaluation.derivation import (
     AppointmentValidation,
     derive_appointment_validity,

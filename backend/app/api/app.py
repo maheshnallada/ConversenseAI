@@ -317,9 +317,7 @@ def create_app(session_factory) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         run = get_eval_repo().get_latest_run(tenant_id, resolved_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="No evaluation run found.")
-        return asdict(run)
+        return asdict(run) if run is not None else None
 
     # Human Review Endpoints
     @app.post("/api/v1/interactions/{interaction_id}/reviews")
@@ -372,30 +370,6 @@ def create_app(session_factory) -> FastAPI:
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
         return get_analytics_service().get_cost_analytics(tenant_id)
-
-    # Use Cases & Evaluator Registry Endpoints
-    @app.get("/api/v1/use-cases")
-    def list_use_cases():
-        return [
-            {
-                "id": "health_insurance",
-                "name": "Health Insurance Consultation",
-                "domain": "Insurance & Healthcare",
-                "description": "Voice consultant outbound campaign for policy review and expert callbacks.",
-                "version": "1.0.0",
-                "active_evaluators": 5,
-            }
-        ]
-
-    @app.get("/api/v1/evaluators")
-    def list_evaluators():
-        return [
-            {"evaluator_id": "compliance.never_rules", "family": "compliance", "version": "1.0.0", "description": "Deterministic safety rules enforcement (PAN, Aadhaar, quotes, AI denial)"},
-            {"evaluator_id": "outcome.intent", "family": "outcome", "version": "1.0.0", "description": "Final customer intent and call progression classification"},
-            {"evaluator_id": "experience.sentiment_emotion", "family": "experience", "version": "1.0.0", "description": "Customer sentiment and emotional tone analysis"},
-            {"evaluator_id": "quality.scorecard", "family": "quality", "version": "1.0.0", "description": "Overall conversation quality scorecard and first issue identification"},
-            {"evaluator_id": "facts.extraction", "family": "facts", "version": "1.0.0", "description": "Structured customer stated facts extraction (policy, city, cover)"},
-        ]
 
     # Process and Evaluate Folder Endpoint
     @app.post("/api/v1/interactions/process-and-evaluate")

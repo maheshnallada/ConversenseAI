@@ -31,7 +31,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
 
   // Call Data
   const [timeline, setTimeline] = useState(null);
-  const [evaluations, setEvaluations] = useState([]);
+  const [evaluationRun, setEvaluationRun] = useState(null);
   const [reviews, setReviews] = useState([]);
   const [audioUrl, setAudioUrl] = useState('');
   const [currentTime, setCurrentTime] = useState(0);
@@ -123,7 +123,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     setSeekTarget(null);
     setExpandAllDetails(null);
     setTimeline(null);
-    setEvaluations([]);
+    setEvaluationRun(null);
     setReviews([]);
     try {
       const [tlData, evalsData, revsData] = await Promise.all([
@@ -134,7 +134,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
 
       if (requestId !== loadRequestId.current) return;
       setTimeline(tlData);
-      setEvaluations(evalsData);
+      setEvaluationRun(evalsData);
       setReviews(revsData);
     } catch (err) {
       if (requestId !== loadRequestId.current) return;
@@ -167,12 +167,15 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     }
   };
 
-  const handleReevaluate = async () => {
+  const handleReevaluate = async (retryFailed = false) => {
     if (!selectedCallId) return;
     setEvaluating(true);
     try {
-      const newEvals = await api.evaluate(selectedCallId);
-      setEvaluations(newEvals || []);
+      const newRun = await api.evaluate(
+        selectedCallId,
+        retryFailed ? evaluationRun?.run_id : null
+      );
+      setEvaluationRun(newRun);
       const tl = await api.getTimeline(selectedCallId).catch(() => null);
       if (tl) setTimeline(tl);
     } catch (e) {
@@ -220,11 +223,22 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     return true;
   });
 
-  // Extract primary outcome and quality summary from evaluations
-  const outcomeEval = evaluations.find((ev) => ev.evaluator_id === 'outcome.intent' || ev.family === 'outcome');
-  const qualityEval = evaluations.find((ev) => ev.evaluator_id === 'quality.scorecard' || ev.family === 'quality');
-  const experienceEval = evaluations.find((ev) => ev.evaluator_id === 'experience.sentiment_emotion' || ev.family === 'experience');
-  const complianceEval = evaluations.find((ev) => ev.evaluator_id === 'compliance.never_rules' || ev.family === 'compliance');
+  const evaluationBatches = evaluationRun?.batches || [];
+  const understanding = evaluationBatches.find(
+    (batch) => batch.batch_name === 'conversation_understanding'
+  )?.parsed_output;
+  const overallAssessment = evaluationRun?.summary?.overall_assessment;
+  const conversationStatus = evaluationBatches.find(
+    (batch) => batch.batch_name === 'conversation_quality'
+  )?.parsed_output?.conversation_completeness?.conversation_status;
+  const compliance = evaluationBatches.find(
+    (batch) => batch.batch_name === 'compliance_appointment'
+  )?.parsed_output?.compliance?.rule_results;
+  const detectedRuleCount = Object.values(compliance || {}).filter(
+    (rule) => rule.status === 'DETECTED'
+  ).length;
+  const criticalIssues = evaluationRun?.summary?.critical_issues || [];
+  const hasFailedBatches = evaluationBatches.some((batch) => batch.status === 'failed');
 
   return (
     <div className="space-y-4">
@@ -298,12 +312,24 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-200 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 dark:text-cyan-300 dark:border-cyan-500/40 transition-all disabled:opacity-50 shadow-sm"
             >
               <Sparkles className={`w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 ${evaluating ? 'animate-spin' : ''}`} />
-              <span>{evaluating ? 'Evaluating...' : 'Run Evaluators'}</span>
+              <span>{evaluating ? 'Evaluating...' : 'Run evaluation'}</span>
             </button>
 
+            {hasFailedBatches && (
+              <button
+                onClick={() => handleReevaluate(true)}
+                disabled={evaluating}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 disabled:opacity-50"
+              >
+                Retry failed batches
+              </button>
+            )}
+
             <button
-              onClick={() => handleOpenAdjudicate(evaluations[0] || null)}
-              disabled={!selectedCallId}
+              onClick={() => handleOpenAdjudicate(
+                evaluationBatches.find((batch) => batch.review_required) || evaluationBatches[0] || null
+              )}
+              disabled={!selectedCallId || evaluationBatches.length === 0}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 transition-colors shadow-md shadow-cyan-500/20 disabled:opacity-50"
             >
               <UserCheck className="w-3.5 h-3.5" /> Adjudicate
@@ -313,37 +339,46 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
 
         {/* Bottom Executive Status Strip */}
         <div className="flex flex-wrap items-center gap-2">
-          {outcomeEval && (
+          {understanding?.outcome && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
               <span className="text-slate-500 mr-1.5">Outcome:</span>
-              <span className="text-slate-900 dark:text-white font-bold">{outcomeEval.label || 'Unknown'}</span>
+              <span className="text-slate-900 dark:text-white font-bold">{understanding.outcome.label}</span>
             </div>
           )}
 
-          {qualityEval && (
+          {overallAssessment && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
-              <span className="text-slate-500 mr-1.5">Quality:</span>
+              <span className="text-slate-500 mr-1.5">Assessment:</span>
               <span className={`font-bold ${
-                qualityEval.label === 'Good' ? 'text-emerald-600 dark:text-emerald-400' : qualityEval.label === 'OK' ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'
+                overallAssessment === 'Good' ? 'text-emerald-600 dark:text-emerald-400' : overallAssessment === 'OK' ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'
               }`}>
-                {qualityEval.label || qualityEval.review_status}
+                {overallAssessment}
               </span>
             </div>
           )}
 
-          {experienceEval && (
+          {understanding?.sentiment && understanding?.emotion && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
-              <span className="text-slate-500 mr-1.5">Emotion:</span>
-              <span className="text-cyan-700 dark:text-cyan-300 font-bold capitalize">{experienceEval.label || 'Neutral'}</span>
+              <span className="text-slate-500 mr-1.5">Sentiment / emotion:</span>
+              <span className="text-cyan-700 dark:text-cyan-300 font-bold">
+                {understanding.sentiment.label} / {understanding.emotion.label}
+              </span>
             </div>
           )}
 
-          {complianceEval && (
+          {conversationStatus && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans flex items-center gap-1.5 whitespace-nowrap shadow-sm">
-              <span className="text-slate-500">Never-Rules:</span>
-              <span className={`font-bold ${complianceEval.review_status === 'PASSED' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                {complianceEval.review_status}
-              </span>
+              <span className="text-slate-500">Conversation status:</span>
+              <span className="font-bold text-slate-800 dark:text-slate-200">{conversationStatus}</span>
+            </div>
+          )}
+          {compliance && (
+            <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
+              <span className="text-slate-500 mr-1.5">Detected compliance issues:</span>
+              <span className="font-bold text-rose-700 dark:text-rose-300">{detectedRuleCount}</span>
+              {criticalIssues.length > 0 && (
+                <span className="ml-1 text-slate-500">({criticalIssues.length} critical)</span>
+              )}
             </div>
           )}
         </div>
@@ -546,26 +581,25 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider font-sans">
-                  Evaluations &amp; Quality Rubrics
+                  Evaluation batches
                 </h3>
               </div>
               <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold font-sans">
-                {evaluations.length} Active
+                {evaluationBatches.length} of 3
               </span>
             </div>
 
-            {evaluations.length === 0 ? (
+            {evaluationBatches.length === 0 ? (
               <div className="p-6 text-center rounded-2xl border border-slate-200 dark:border-slate-800/80 bg-white dark:bg-slate-900/30 text-slate-500 text-xs shadow-sm">
-                No evaluations recorded for this interaction yet. Click &ldquo;Run Evaluators&rdquo; above to run the 5-dimension suite.
+                No evaluation run is available. Start an evaluation to create the three batch results.
               </div>
             ) : (
               <div className="space-y-3 max-h-[460px] overflow-y-auto pr-1">
-                {evaluations.map((ev, i) => (
+                {evaluationBatches.map((ev) => (
                   <EvaluationCard
-                    key={ev.evaluator_id || i}
+                    key={ev.evaluation_id}
                     evaluation={ev}
                     onOpenReview={handleOpenAdjudicate}
-                    onSeek={(s) => setSeekTarget(s)}
                   />
                 ))}
               </div>
@@ -582,8 +616,10 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
                 </h3>
               </div>
               <button
-                onClick={() => handleOpenAdjudicate(evaluations[0] || null)}
-                disabled={!selectedCallId}
+                onClick={() => handleOpenAdjudicate(
+                  evaluationBatches.find((batch) => batch.review_required) || evaluationBatches[0] || null
+                )}
+                disabled={!selectedCallId || evaluationBatches.length === 0}
                 className="text-xs font-sans text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300 font-semibold transition-colors disabled:opacity-50"
               >
                 + Add Review
@@ -599,7 +635,9 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
                 {reviews.map((r, i) => (
                   <div key={r.review_id || i} className="p-3 rounded-xl bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 text-xs shadow-sm dark:shadow-none font-sans">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono text-cyan-700 dark:text-cyan-400 font-bold">{r.evaluator_id}</span>
+                      <span className="font-mono text-cyan-700 dark:text-cyan-400 font-bold">
+                        {r.evaluation_id || `Archived: ${r.evaluator_id}`}
+                      </span>
                       <span className={`px-2 py-0.5 rounded-full font-mono text-[10px] font-bold ${
                         r.review_decision === 'OVERRIDDEN'
                           ? 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/70 dark:text-amber-400 dark:border-amber-600/30'

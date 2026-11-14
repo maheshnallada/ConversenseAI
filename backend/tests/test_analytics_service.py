@@ -2,8 +2,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 import pytest
+from sqlalchemy import text
 from app.storage.db import create_session_factory, init_db
-from app.storage.orm import EvaluationResultRow, InteractionRow
+from app.storage.orm import InteractionRow
 from app.analytics.service import AnalyticsService
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.domain.observability import InteractionMetrics, PercentilesResult
@@ -31,26 +32,6 @@ def _interaction(tenant_id, interaction_id, status):
         payload_json=json.dumps({"status": status}),
         payload_hash=interaction_id,
         created_at=datetime.now(timezone.utc),
-    )
-
-
-def _evaluation(tenant_id, interaction_id, family, version, label, created_at):
-    return EvaluationResultRow(
-        tenant_id=tenant_id,
-        interaction_id=interaction_id,
-        evaluator_id=f"{family}.test",
-        evaluator_version=version,
-        family=family,
-        method="deterministic",
-        label=label,
-        score=0.5,
-        confidence=0.8,
-        severity="low",
-        review_status="PASSED",
-        evidence_json="[]",
-        reason="test result",
-        details_json="{}",
-        created_at=created_at,
     )
 
 
@@ -228,12 +209,32 @@ def test_analytics_uses_latest_versioned_run_not_archival_results():
     current = datetime(2026, 1, 2, tzinfo=timezone.utc)
     with factory() as session:
         session.add(_interaction("tenant_latest", "call_latest", "completed"))
-        session.add_all(
-            [
-                _evaluation("tenant_latest", "call_latest", "quality", "9.0", "Good", current),
-                _evaluation("tenant_latest", "call_latest", "compliance", "9.0", "PASSED", current),
-                _evaluation("tenant_latest", "call_latest", "outcome", "9.0", "Expert call booked", current),
-            ]
+        session.execute(
+            text(
+                "CREATE TABLE evaluation_results "
+                "(id INTEGER PRIMARY KEY, tenant_id TEXT, interaction_id TEXT, "
+                "evaluator_id TEXT, evaluator_version TEXT, family TEXT, "
+                "method TEXT, label TEXT, review_status TEXT, evidence_json TEXT, "
+                "reason TEXT, details_json TEXT, created_at DATETIME)"
+            )
+        )
+        session.execute(
+            text(
+                "INSERT INTO evaluation_results "
+                "(tenant_id, interaction_id, evaluator_id, evaluator_version, "
+                "family, method, label, review_status, evidence_json, reason, "
+                "details_json, created_at) VALUES "
+                "('tenant_latest', 'call_latest', 'legacy.quality', '9.0', "
+                "'quality', 'deterministic', 'Good', 'PASSED', '[]', 'archived', "
+                "'{}', :created_at), "
+                "('tenant_latest', 'call_latest', 'legacy.compliance', '9.0', "
+                "'compliance', 'deterministic', 'PASSED', 'PASSED', '[]', "
+                "'archived', '{}', :created_at), "
+                "('tenant_latest', 'call_latest', 'legacy.outcome', '9.0', "
+                "'outcome', 'deterministic', 'Expert call booked', 'PASSED', "
+                "'[]', 'archived', '{}', :created_at)"
+            ),
+            {"created_at": current.isoformat()},
         )
         session.commit()
     repo = EvaluationRepository(factory)

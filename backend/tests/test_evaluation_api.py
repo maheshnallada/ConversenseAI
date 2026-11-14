@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import pytest
+from sqlalchemy import text
 from app.api.app import (
     create_app,
     EvaluateInteractionRequest,
@@ -9,7 +10,6 @@ from app.api.app import (
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.storage.db import create_session_factory, init_db
 from app.storage.evaluation_repo import EvaluationRepository
-from app.storage.orm import EvaluationResultRow
 
 @pytest.fixture
 def test_app():
@@ -101,24 +101,26 @@ def test_evaluations_endpoint_returns_latest_versioned_run_not_legacy_rows(
     repo.save_run(_run("run-old", now - timedelta(minutes=1)))
     repo.save_run(_run("run-latest", now))
     with session_factory.begin() as session:
-        session.add(
-            EvaluationResultRow(
-                tenant_id="tenant_001",
-                interaction_id="call_01",
-                evaluator_id="legacy.outcome",
-                evaluator_version="1",
-                family="outcome",
-                method="deterministic",
-                label="legacy",
-                score=None,
-                confidence=None,
-                severity=None,
-                review_status="PASSED",
-                evidence_json="[]",
-                reason="archived",
-                details_json="{}",
-                created_at=now,
+        session.execute(
+            text(
+                "CREATE TABLE evaluation_results "
+                "(id INTEGER PRIMARY KEY, tenant_id TEXT, interaction_id TEXT, "
+                "evaluator_id TEXT, evaluator_version TEXT, family TEXT, "
+                "method TEXT, label TEXT, review_status TEXT, evidence_json TEXT, "
+                "reason TEXT, details_json TEXT, created_at DATETIME)"
             )
+        )
+        session.execute(
+            text(
+                "INSERT INTO evaluation_results "
+                "(tenant_id, interaction_id, evaluator_id, evaluator_version, "
+                "family, method, label, review_status, evidence_json, reason, "
+                "details_json, created_at) VALUES "
+                "('tenant_001', 'call_01', 'legacy.outcome', '1', 'outcome', "
+                "'deterministic', 'legacy', 'PASSED', '[]', 'archived', '{}', "
+                ":created_at)"
+            ),
+            {"created_at": now.isoformat()},
         )
 
     class StubEvaluationService:
@@ -142,6 +144,28 @@ def test_evaluations_endpoint_returns_latest_versioned_run_not_legacy_rows(
         "conversation_understanding"
     ]
     assert "evaluator_id" not in result["batches"][0]
+
+
+def test_evaluations_endpoint_returns_empty_when_no_run_exists(
+    session_factory, monkeypatch
+):
+    from app.api import app as api_module
+
+    class StubEvaluationService:
+        def __init__(self, _session_factory):
+            pass
+
+        def resolve_interaction_id(self, tenant_id, interaction_id):
+            return interaction_id
+
+    monkeypatch.setattr(api_module, "EvaluationService", StubEvaluationService)
+    app = create_app(session_factory)
+    route = next(
+        route for route in app.routes
+        if route.path == "/api/v1/interactions/{interaction_id}/evaluations"
+    )
+
+    assert route.endpoint("call_without_run", "tenant_001") is None
 
 
 def test_review_endpoint_targets_a_versioned_batch(session_factory, monkeypatch):
@@ -187,4 +211,5 @@ def test_api_routes_registered(test_app):
     assert "/api/v1/interactions/{interaction_id}/evaluate" in routes
     assert "/api/v1/interactions/{interaction_id}/evaluations" in routes
     assert "/api/v1/interactions/process-and-evaluate" in routes
+    assert "/api/v1/evaluators" not in routes
 

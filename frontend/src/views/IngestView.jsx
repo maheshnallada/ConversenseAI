@@ -71,7 +71,7 @@ export default function IngestView({ onNavigateToDrillDown }) {
 
     try {
       setTimeout(() => setCurrentStep('Reconstructing chronological timeline & audio markers...'), 400);
-      setTimeout(() => setCurrentStep('Executing multi-dimensional evaluators suite...'), 1000);
+      setTimeout(() => setCurrentStep('Running structured evaluation batches...'), 1000);
 
       const resp = await api.processPath(folderPath.trim());
       setResult(resp);
@@ -95,7 +95,7 @@ export default function IngestView({ onNavigateToDrillDown }) {
 
     try {
       setTimeout(() => setCurrentStep('Unpacking and reconciling transcripts & audio...'), 600);
-      setTimeout(() => setCurrentStep('Running evaluators on extracted conversation...'), 1400);
+      setTimeout(() => setCurrentStep('Evaluating extracted conversation...'), 1400);
 
       const resp = await api.uploadZip(selectedFile);
       setResult(resp.report || resp);
