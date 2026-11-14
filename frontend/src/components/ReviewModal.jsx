@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, CheckCircle, AlertCircle, UserCheck } from 'lucide-react';
 import { api } from '../api/client';
 
@@ -11,10 +11,25 @@ export default function ReviewModal({ isOpen, onClose, callId, evaluation, onSuc
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setEvaluatorId(evaluation?.evaluator_id || 'safety');
+    setReviewedLabel(evaluation?.label || 'PASSED');
+    setDecision('OVERRIDDEN');
+    setReviewerName('Quality Lead');
+    setNotes('');
+    setError(null);
+  }, [isOpen, callId, evaluation]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!callId?.trim()) {
+      setError('Select an interaction before submitting an adjudication.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -144,7 +159,7 @@ export default function ReviewModal({ isOpen, onClose, callId, evaluation, onSuc
             </button>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !callId?.trim()}
               className="px-4 py-2 rounded-xl text-xs bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold shadow-md shadow-cyan-500/20 transition-all flex items-center gap-1.5 disabled:opacity-50"
             >
               {loading ? (

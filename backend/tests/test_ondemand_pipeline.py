@@ -37,7 +37,7 @@ def test_on_demand_evaluation_existing_call(db_session_factory):
 def test_on_demand_pipeline_new_call_folder(db_session_factory):
     eval_service = EvaluationService(session_factory=db_session_factory)
     root = Path(__file__).resolve().parent.parent.parent
-    call_folder = root / "data" / "calls" / "call_03"
+    call_folder = root / "backend" / "storage" / "artifacts" / "health_campaign" / "call_03"
 
     report = eval_service.process_and_evaluate_folder(
         call_folder_path=call_folder,

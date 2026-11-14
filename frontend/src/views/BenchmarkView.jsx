@@ -69,13 +69,15 @@ export default function BenchmarkView() {
 
   // Calculate average accuracy across dimensions
   const dims = benchmark?.dimension_metrics ? Object.entries(benchmark.dimension_metrics) : [];
-  const avgAccuracy = dims.length
-    ? (dims.reduce((acc, [, m]) => acc + (m.accuracy || 0), 0) / dims.length * 100).toFixed(1)
-    : '94.2';
-
-  const avgF1 = dims.length
-    ? (dims.reduce((acc, [, m]) => acc + (m.f1_score || 0), 0) / dims.length * 100).toFixed(1)
-    : '92.8';
+  const hasBenchmarkData = Boolean(
+    benchmark && benchmark.total_interactions > 0 && dims.length > 0
+  );
+  const avgAccuracy = hasBenchmarkData
+    ? (dims.reduce((acc, [, metric]) => acc + metric.accuracy, 0) / dims.length * 100).toFixed(1)
+    : null;
+  const avgF1 = hasBenchmarkData
+    ? (dims.reduce((acc, [, metric]) => acc + metric.f1_score, 0) / dims.length * 100).toFixed(1)
+    : null;
 
   return (
     <div className="space-y-6">
@@ -150,6 +152,23 @@ export default function BenchmarkView() {
         </div>
       )}
 
+      {!hasBenchmarkData ? (
+        <div className="p-8 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 text-center shadow-sm">
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+            {loading
+              ? 'Loading benchmark data...'
+              : error
+                ? 'Benchmark data could not be loaded.'
+                : 'No benchmark data is available yet.'}
+          </p>
+          {!loading && !error && (
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Import the golden labels or seed calls to populate the benchmark.
+            </p>
+          )}
+        </div>
+      ) : (
+      <>
       {/* KPI Cards Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-sm dark:shadow-none transition-colors">
@@ -158,7 +177,7 @@ export default function BenchmarkView() {
             <FileText className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
           </div>
           <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
-            {benchmark?.total_interactions ?? 50}
+            {benchmark.total_interactions}
           </div>
           <span className="text-[10px] font-mono text-slate-400 dark:text-slate-500">Expert-audited cohort</span>
         </div>
@@ -191,7 +210,7 @@ export default function BenchmarkView() {
             <ShieldAlert className="w-4 h-4 text-rose-600 dark:text-rose-400" />
           </div>
           <div className="text-2xl font-bold font-mono text-rose-600 dark:text-rose-400">
-            {benchmark?.compliance_false_negatives ?? 0}
+            {benchmark.compliance_false_negatives}
           </div>
           <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold">0 critical compliance breaches</span>
         </div>
@@ -255,6 +274,8 @@ export default function BenchmarkView() {
             />
           ))}
         </div>
+      )}
+      </>
       )}
     </div>
   );

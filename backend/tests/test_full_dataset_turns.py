@@ -9,7 +9,7 @@ from app.storage.orm import TurnRow
 from app.storage.transcript_repo import TranscriptRepository
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CALLS_DIR = PROJECT_ROOT / "data" / "calls"
+CALLS_DIR = PROJECT_ROOT / "backend" / "storage" / "artifacts" / "health_campaign"
 
 
 def test_full_dataset_transcript_processing():
@@ -50,7 +50,12 @@ def test_full_dataset_transcript_processing():
                 if t.playback_spoken is None:
                     spoken_marks["none"] += 1
                 else:
-                    assert t.playback_spoken in spoken_marks, (
+                    assert t.playback_spoken in {
+                        "heard",
+                        "cut",
+                        "not_played",
+                        "no_audio",
+                    }, (
                         f"Unexpected playback status: {t.playback_spoken!r}"
                     )
                     spoken_marks[t.playback_spoken] += 1

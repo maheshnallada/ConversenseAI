@@ -11,6 +11,8 @@ from app.storage.orm import (
     EvaluationResultRow,
     InteractionTimelineRow,
 )
+from app.observability.calculator import calculate_percentiles
+from app.storage.observability_repo import aggregate_cost_rows
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,18 @@ logger = logging.getLogger(__name__)
 class AnalyticsService:
     def __init__(self, session_factory: sessionmaker):
         self.session_factory = session_factory
+
+    @staticmethod
+    def _latest_evaluations(session, tenant_id: str) -> list[EvaluationResultRow]:
+        rows = session.scalars(
+            select(EvaluationResultRow)
+            .where(EvaluationResultRow.tenant_id == tenant_id)
+            .order_by(desc(EvaluationResultRow.created_at), desc(EvaluationResultRow.id))
+        ).all()
+        selected: dict[tuple[str, str], EvaluationResultRow] = {}
+        for row in rows:
+            selected.setdefault((row.interaction_id, row.family), row)
+        return list(selected.values())
 
     def get_overview_analytics(self, tenant_id: str = "health_campaign") -> Dict[str, Any]:
         with self.session_factory() as session:
@@ -29,35 +43,65 @@ class AnalyticsService:
             total_interactions = len(interactions)
             completed = 0
             abandoned = 0
+            failed = 0
+            pending = 0
+            unknown = 0
             for i in interactions:
                 try:
                     payload = json.loads(i.payload_json)
-                    status = payload.get("status", "completed")
-                    if status == "completed":
-                        completed += 1
-                    else:
-                        abandoned += 1
+                    status = payload.get("status") if isinstance(payload, dict) else None
                 except Exception:
+                    status = None
+
+                if status == "completed":
                     completed += 1
+                elif status == "abandoned":
+                    abandoned += 1
+                elif status == "failed":
+                    failed += 1
+                elif status == "pending":
+                    pending += 1
+                else:
+                    unknown += 1
 
             # Observability metrics aggregations
             metrics_rows = session.scalars(
                 select(ObservabilityMetricsRow).where(ObservabilityMetricsRow.tenant_id == tenant_id)
             ).all()
 
-            total_cost = sum(r.total_cost or 0.0 for r in metrics_rows)
-            avg_cost = total_cost / total_interactions if total_interactions > 0 else 0.0
+            total_cost, currency, cost_by_currency = aggregate_cost_rows(metrics_rows)
+            avg_cost = (
+                round(total_cost / total_interactions, 4)
+                if total_cost is not None and total_interactions > 0
+                else None
+            )
 
-            latencies = [r.avg_response_latency_s for r in metrics_rows if r.avg_response_latency_s is not None]
-            avg_lat = round(sum(latencies) / len(latencies), 3) if latencies else None
-
-            p95_latencies = [r.p95_response_latency_s for r in metrics_rows if r.p95_response_latency_s is not None]
-            p95_lat = round(sum(p95_latencies) / len(p95_latencies), 3) if p95_latencies else None
+            latency_samples: list[float] = []
+            for row in metrics_rows:
+                try:
+                    metrics_data = json.loads(row.metrics_json)
+                    samples = metrics_data.get("response_latency_samples", [])
+                    if isinstance(samples, list):
+                        latency_samples.extend(
+                            sample
+                            for sample in samples
+                            if isinstance(sample, (int, float)) and sample >= 0
+                        )
+                except (TypeError, ValueError):
+                    continue
+            latency_percentiles = calculate_percentiles(latency_samples)
+            legacy_averages = [
+                row.avg_response_latency_s
+                for row in metrics_rows
+                if row.avg_response_latency_s is not None
+            ]
+            avg_lat = latency_percentiles.avg
+            if avg_lat is None and legacy_averages:
+                avg_lat = round(sum(legacy_averages) / len(legacy_averages), 3)
+            p95_lat = latency_percentiles.p95
 
             # Evaluation results aggregations
-            eval_rows = session.scalars(
-                select(EvaluationResultRow).where(EvaluationResultRow.tenant_id == tenant_id)
-            ).all()
+            eval_rows = self._latest_evaluations(session, tenant_id)
 
             quality_counts = Counter()
             compliance_findings = {"PASSED": 0, "FAILED": 0}
@@ -81,22 +125,27 @@ class AnalyticsService:
                 "total_interactions": total_interactions,
                 "completed_interactions": completed,
                 "abandoned_interactions": abandoned,
+                "failed_interactions": failed,
+                "pending_interactions": pending,
+                "unknown_interactions": unknown,
                 "successful_outcomes": successful_outcomes,
                 "successful_outcomes_percentage": success_rate,
                 "quality_distribution": dict(quality_counts),
                 "compliance_findings": compliance_findings,
                 "avg_latency_s": avg_lat,
                 "p95_latency_s": p95_lat,
-                "total_cost_usd": round(total_cost, 4),
-                "avg_cost_per_interaction_usd": round(avg_cost, 4),
+                "total_cost": total_cost,
+                "currency": currency,
+                "cost_by_currency": cost_by_currency,
+                "total_cost_usd": total_cost if currency == "USD" else None,
+                "avg_cost_per_interaction": avg_cost,
+                "avg_cost_per_interaction_usd": avg_cost if currency == "USD" else None,
                 "freshness_status": "UP_TO_DATE",
             }
 
     def get_quality_analytics(self, tenant_id: str = "health_campaign") -> Dict[str, Any]:
         with self.session_factory() as session:
-            eval_rows = session.scalars(
-                select(EvaluationResultRow).where(EvaluationResultRow.tenant_id == tenant_id)
-            ).all()
+            eval_rows = self._latest_evaluations(session, tenant_id)
 
             outcomes = Counter()
             sentiment = Counter()
@@ -150,52 +199,95 @@ class AnalyticsService:
                 select(ObservabilityMetricsRow).where(ObservabilityMetricsRow.tenant_id == tenant_id)
             ).all()
 
-            total_cost = sum(r.total_cost or 0.0 for r in metrics_rows)
+            total_cost, currency, cost_by_currency = aggregate_cost_rows(metrics_rows)
             total_tokens = sum(r.total_tokens or 0 for r in metrics_rows)
             input_tokens = sum(r.input_tokens or 0 for r in metrics_rows)
             output_tokens = sum(r.output_tokens or 0 for r in metrics_rows)
             total_telephony_s = sum(r.telephony_duration_s or 0.0 for r in metrics_rows)
 
-            llm_cost_total = 0.0
-            stt_cost_total = 0.0
-            tts_cost_total = 0.0
-            telephony_cost_total = 0.0
+            breakdown_by_currency: Dict[str, Dict[str, float]] = {}
             models_dict: Dict[str, Dict[str, Any]] = {}
 
             for r in metrics_rows:
                 try:
                     m = json.loads(r.metrics_json)
                     cb = m.get("cost_breakdown", {})
-                    llm_cost_total += cb.get("llm_cost", 0.0)
-                    stt_cost_total += cb.get("stt_cost", 0.0)
-                    tts_cost_total += cb.get("tts_cost", 0.0)
-                    telephony_cost_total += cb.get("telephony_cost", 0.0)
+                    row_currency = cb.get("currency") or r.cost_currency or "UNKNOWN"
+                    currency_breakdown = breakdown_by_currency.setdefault(
+                        row_currency,
+                        {"llm_cost": 0.0, "stt_cost": 0.0, "tts_cost": 0.0, "telephony_cost": 0.0},
+                    )
+                    for cost_name in currency_breakdown:
+                        cost_value = cb.get(cost_name)
+                        if isinstance(cost_value, (int, float)):
+                            currency_breakdown[cost_name] += cost_value
 
                     model_name = m.get("llm_model") or "unknown"
                     if model_name not in models_dict:
-                        models_dict[model_name] = {"calls": 0, "tokens": 0, "cost_usd": 0.0}
+                        models_dict[model_name] = {
+                            "calls": 0,
+                            "tokens": 0,
+                            "cost_by_currency": {},
+                        }
                     models_dict[model_name]["calls"] += 1
                     models_dict[model_name]["tokens"] += (r.total_tokens or 0)
-                    models_dict[model_name]["cost_usd"] += cb.get("llm_cost", 0.0)
+                    llm_cost = cb.get("llm_cost")
+                    if isinstance(llm_cost, (int, float)):
+                        model_costs = models_dict[model_name]["cost_by_currency"]
+                        model_costs[row_currency] = model_costs.get(row_currency, 0.0) + llm_cost
                 except Exception:
                     pass
 
+            breakdown_by_currency = {
+                row_currency: {
+                    cost_name: round(cost, 4)
+                    for cost_name, cost in values.items()
+                }
+                for row_currency, values in breakdown_by_currency.items()
+            }
             return {
-                "total_cost_usd": round(total_cost, 4),
-                "currency": "USD",
+                "total_cost": total_cost,
+                "total_cost_usd": total_cost if currency == "USD" else None,
+                "currency": currency,
+                "cost_by_currency": cost_by_currency,
+                "cost_breakdown_by_currency": breakdown_by_currency,
                 "total_tokens": total_tokens,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
-                "llm_cost_usd": round(llm_cost_total, 4),
-                "stt_cost_usd": round(stt_cost_total, 4),
-                "tts_cost_usd": round(tts_cost_total, 4),
-                "telephony_cost_usd": round(telephony_cost_total, 4),
+                "llm_cost_usd": (
+                    breakdown_by_currency.get("USD", {}).get("llm_cost")
+                    if currency == "USD"
+                    else None
+                ),
+                "stt_cost_usd": (
+                    breakdown_by_currency.get("USD", {}).get("stt_cost")
+                    if currency == "USD"
+                    else None
+                ),
+                "tts_cost_usd": (
+                    breakdown_by_currency.get("USD", {}).get("tts_cost")
+                    if currency == "USD"
+                    else None
+                ),
+                "telephony_cost_usd": (
+                    breakdown_by_currency.get("USD", {}).get("telephony_cost")
+                    if currency == "USD"
+                    else None
+                ),
                 "telephony_duration_s": round(total_telephony_s, 2),
                 "model_breakdown": {
                     k: {
                         "calls": v["calls"],
                         "tokens": v["tokens"],
-                        "cost_usd": round(v["cost_usd"], 4),
+                        "cost_by_currency": {
+                            row_currency: round(value, 4)
+                            for row_currency, value in v["cost_by_currency"].items()
+                        },
+                        "cost_usd": (
+                            round(v["cost_by_currency"].get("USD", 0.0), 4)
+                            if currency == "USD"
+                            else None
+                        ),
                     }
                     for k, v in models_dict.items()
                 },
@@ -224,9 +316,7 @@ class AnalyticsService:
                 ).all()
             }
 
-            eval_rows = session.scalars(
-                select(EvaluationResultRow).where(EvaluationResultRow.tenant_id == tenant_id)
-            ).all()
+            eval_rows = self._latest_evaluations(session, tenant_id)
 
             evals_by_id: Dict[str, Dict[str, str]] = {}
             for ev in eval_rows:
@@ -240,10 +330,15 @@ class AnalyticsService:
                 try:
                     payload = json.loads(row.payload_json)
                     call_data = payload.get("domain_data", {})
-                    call_status = payload.get("status", "completed")
+                    raw_status = payload.get("status") if isinstance(payload, dict) else None
+                    call_status = (
+                        raw_status
+                        if raw_status in {"completed", "abandoned", "failed", "pending", "unknown"}
+                        else "unknown"
+                    )
                     started_at = payload.get("started_at")
                 except Exception:
-                    call_status = "completed"
+                    call_status = "unknown"
                     started_at = None
 
                 m = metrics.get(row.interaction_id)
@@ -280,7 +375,9 @@ class AnalyticsService:
                     "quality": quality_label,
                     "sentiment": sentiment_label,
                     "compliance_status": compliance_label,
-                    "cost_usd": m.total_cost if m else 0.0,
+                    "cost": m.total_cost if m else None,
+                    "currency": m.cost_currency if m else None,
+                    "cost_usd": m.total_cost if m and m.cost_currency == "USD" else None,
                     "evaluations_count": len(e),
                 })
 

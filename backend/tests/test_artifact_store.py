@@ -45,6 +45,17 @@ def test_nonexistent_uri_returns_false_and_raises(tmp_path: Path):
         store.get_path(fake_uri)
 
 
+def test_initialization_preserves_preexisting_write_test_artifact(tmp_path: Path):
+    storage_dir = tmp_path / "artifacts"
+    storage_dir.mkdir()
+    existing_probe = storage_dir / ".write_test"
+    existing_probe.write_text("keep this artifact", encoding="utf-8")
+
+    LocalArtifactStore(base_dir=storage_dir)
+
+    assert existing_probe.read_text(encoding="utf-8") == "keep this artifact"
+
+
 def test_readonly_filesystem_fallback(tmp_path: Path, monkeypatch):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

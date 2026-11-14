@@ -118,12 +118,27 @@ class ComplianceEvaluator(BaseEvaluator):
         appointment_rules = self.rules.get("appointment_rules")
         appointment_rules = appointment_rules if isinstance(appointment_rules, Mapping) else {}
         booking_time = record.get("time")
-        time_match = re.fullmatch(r"(\d{1,2}):([0-5]\d)", booking_time) if isinstance(booking_time, str) else None
+        time_match = (
+            re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", booking_time)
+            if isinstance(booking_time, str)
+            else None
+        )
+        if "time" in record and time_match is None:
+            evidence.append(
+                EvidenceItem(
+                    source_type="metadata",
+                    reference_id="end_call.record.time",
+                    line_index=None,
+                    text_snippet=f"Booked time: {booking_time}",
+                    timestamp_s=None,
+                    reason="Invalid appointment time; expected HH:MM in 24-hour format",
+                )
+            )
         if time_match:
-            hour = int(time_match.group(1))
+            hour = int(booking_time[:2])
             earliest = appointment_rules.get("earliest_hour", 9)
             latest = appointment_rules.get("latest_hour", 21)
-            if hour <= 23 and (hour < earliest or hour >= latest):
+            if hour < earliest or hour >= latest:
                 evidence.append(
                     EvidenceItem(
                         source_type="metadata",
@@ -146,6 +161,18 @@ class ComplianceEvaluator(BaseEvaluator):
                 parsed_appointment_date = date.fromisoformat(appointment_date.strip())
             except ValueError:
                 pass
+
+        if "date" in record and appointment_date is not None and parsed_appointment_date is None:
+            evidence.append(
+                EvidenceItem(
+                    source_type="metadata",
+                    reference_id="end_call.record.date",
+                    line_index=None,
+                    text_snippet=f"Booked date: {appointment_date}",
+                    timestamp_s=None,
+                    reason="Invalid appointment date; expected an ISO date",
+                )
+            )
 
         if appointment_rules.get("allow_same_day") is False and parsed_appointment_date:
             call_date = (

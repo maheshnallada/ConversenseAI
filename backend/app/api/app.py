@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+import re
 import uuid
 import zipfile
 from dataclasses import asdict
@@ -30,6 +31,27 @@ from app.validation.benchmark import BenchmarkEngine
 from app.validation.golden_loader import load_golden_dataset
 
 logger = get_logger("conversense.api")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+UPLOAD_ROOT = (REPOSITORY_ROOT / "backend" / "storage" / "uploads").resolve()
+_SAFE_FOLDER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+
+
+def _create_upload_staging_dir(tenant_id: str, folder_name: str | None = None) -> Path:
+    if folder_name is not None and not _SAFE_FOLDER_NAME.fullmatch(folder_name):
+        raise HTTPException(
+            status_code=400,
+            detail="folder_name must be a single safe directory name",
+        )
+
+    tenant_root = (UPLOAD_ROOT / tenant_id).resolve()
+    staging_dir = (tenant_root / (folder_name or f"upload_{uuid.uuid4().hex[:12]}")).resolve()
+    if not tenant_root.is_relative_to(UPLOAD_ROOT) or not staging_dir.is_relative_to(tenant_root):
+        raise HTTPException(status_code=400, detail="Invalid upload staging directory")
+    try:
+        staging_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail="Upload folder already exists") from exc
+    return staging_dir
 
 
 class IngestResponse(BaseModel):
@@ -426,9 +448,7 @@ def create_app(session_factory) -> FastAPI:
         if not body:
             raise HTTPException(status_code=400, detail="Empty request body. Please upload a ZIP archive.")
 
-        upload_id = f"upload_{uuid.uuid4().hex[:12]}"
-        staging_dir = Path("backend/storage/uploads") / upload_id
-        staging_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir = _create_upload_staging_dir(tenant_id)
 
         try:
             with zipfile.ZipFile(io.BytesIO(body)) as zf:
@@ -475,9 +495,7 @@ def create_app(session_factory) -> FastAPI:
             and tenant_id != body.tenant_id
         ):
             raise HTTPException(status_code=403, detail="Tenant header does not match body")
-        upload_id = body.folder_name or f"upload_{uuid.uuid4().hex[:12]}"
-        staging_dir = Path("backend/storage/uploads") / upload_id
-        staging_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir = _create_upload_staging_dir(tenant_id, body.folder_name)
 
         (staging_dir / "call.json").write_text(body.call_json, encoding="utf-8")
 
@@ -513,11 +531,11 @@ def create_app(session_factory) -> FastAPI:
     ):
         service = get_eval_service()
 
+        repo_root = Path(__file__).resolve().parents[3]
         calls_dirs = [
-            Path("data/calls"),
             Path("/app/data/calls"),
-            Path(__file__).resolve().parent.parent.parent.parent / "data" / "calls",
-            Path(__file__).resolve().parent.parent.parent / "data" / "calls",
+            repo_root / "data" / "calls",
+            get_eval_service().artifact_store.base_dir / tenant_id,
         ]
         target_dir = None
         for d in calls_dirs:

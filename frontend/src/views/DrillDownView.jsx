@@ -25,6 +25,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   const [callList, setCallList] = useState([]);
   const [selectedCallId, setSelectedCallId] = useState(initialCallId || '');
   const [loading, setLoading] = useState(false);
+  const loadRequestId = useRef(0);
   const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState(null);
 
@@ -46,6 +47,12 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [targetEvaluation, setTargetEvaluation] = useState(null);
 
+  function selectCallId(id) {
+    loadRequestId.current += 1;
+    setSelectedCallId(id);
+    if (onSelectCallId) onSelectCallId(id);
+  }
+
   // 1. Fetch available calls on mount
   useEffect(() => {
     async function fetchCalls() {
@@ -54,8 +61,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
         setCallList(calls || []);
         if (!selectedCallId && calls && calls.length > 0) {
           const first = calls[0].interaction_id || calls[0].id || calls[0];
-          setSelectedCallId(first);
-          if (onSelectCallId) onSelectCallId(first);
+          selectCallId(first);
         }
       } catch (err) {
         console.error('Failed to load call list:', err);
@@ -67,7 +73,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   // Update when initialCallId changes from explorer/ingest
   useEffect(() => {
     if (initialCallId && initialCallId !== selectedCallId) {
-      setSelectedCallId(initialCallId);
+      selectCallId(initialCallId);
     }
   }, [initialCallId]);
 
@@ -75,6 +81,9 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   useEffect(() => {
     if (!selectedCallId) return;
     loadCallData(selectedCallId);
+    return () => {
+      loadRequestId.current += 1;
+    };
   }, [selectedCallId]);
 
   useEffect(() => {
@@ -106,35 +115,33 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   }, [selectedCallId]);
 
   async function loadCallData(id) {
+    if (!id) return;
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     setError(null);
     setCurrentTime(0);
     setSeekTarget(null);
     setExpandAllDetails(null);
+    setTimeline(null);
+    setEvaluations([]);
+    setReviews([]);
     try {
       const [tlData, evalsData, revsData] = await Promise.all([
-        api.getTimeline(id).catch((e) => {
-          console.warn('Timeline error:', e);
-          return null;
-        }),
-        api.getEvaluations(id).catch((e) => {
-          console.warn('Evaluations error:', e);
-          return [];
-        }),
-        api.listReviews(id).catch((e) => {
-          console.warn('Reviews error:', e);
-          return [];
-        }),
+        api.getTimeline(id),
+        api.getEvaluations(id),
+        api.listReviews(id),
       ]);
 
+      if (requestId !== loadRequestId.current) return;
       setTimeline(tlData);
-      setEvaluations(evalsData || []);
-      setReviews(revsData || []);
+      setEvaluations(evalsData);
+      setReviews(revsData);
     } catch (err) {
+      if (requestId !== loadRequestId.current) return;
       console.error('Error fetching interaction details:', err);
       setError(err.message || 'Failed to load interaction details');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   }
 
@@ -148,8 +155,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     if (currentIndex > 0) {
       const prev = callList[currentIndex - 1];
       const val = typeof prev === 'string' ? prev : (prev.interaction_id || prev.id);
-      setSelectedCallId(val);
-      if (onSelectCallId) onSelectCallId(val);
+      selectCallId(val);
     }
   };
 
@@ -157,8 +163,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     if (currentIndex < callList.length - 1) {
       const next = callList[currentIndex + 1];
       const val = typeof next === 'string' ? next : (next.interaction_id || next.id);
-      setSelectedCallId(val);
-      if (onSelectCallId) onSelectCallId(val);
+      selectCallId(val);
     }
   };
 
@@ -249,8 +254,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
                 value={selectedCallId}
                 onChange={(e) => {
                   const id = e.target.value;
-                  setSelectedCallId(id);
-                  if (onSelectCallId) onSelectCallId(id);
+                  selectCallId(id);
                 }}
                 className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-sans text-cyan-800 dark:text-cyan-400 font-bold rounded-lg px-3 py-1.5 focus:outline-none focus:border-cyan-500 cursor-pointer max-w-[220px] sm:max-w-xs truncate"
               >
@@ -299,7 +303,8 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
 
             <button
               onClick={() => handleOpenAdjudicate(evaluations[0] || null)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 transition-colors shadow-md shadow-cyan-500/20"
+              disabled={!selectedCallId}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 transition-colors shadow-md shadow-cyan-500/20 disabled:opacity-50"
             >
               <UserCheck className="w-3.5 h-3.5" /> Adjudicate
             </button>
@@ -578,7 +583,8 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
               </div>
               <button
                 onClick={() => handleOpenAdjudicate(evaluations[0] || null)}
-                className="text-xs font-sans text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300 font-semibold transition-colors"
+                disabled={!selectedCallId}
+                className="text-xs font-sans text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300 font-semibold transition-colors disabled:opacity-50"
               >
                 + Add Review
               </button>

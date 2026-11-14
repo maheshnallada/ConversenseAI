@@ -112,15 +112,17 @@ def test_platform_summary_marks_mixed_currency_totals_unavailable():
 
     summary = repo.get_platform_summary("tenant_obs")
 
-    assert summary.currency == "MIXED"
+    assert summary.currency is None
     assert summary.total_cost is None
+    assert summary.cost_by_currency == {"USD": 0.01, "EUR": 0.02}
 
 
-def test_empty_platform_summary_uses_zero_usd_total():
+def test_empty_platform_summary_has_no_currency_or_total():
     repo = ObservabilityRepository(_factory())
 
     summary = repo.get_platform_summary("tenant_without_metrics")
 
-    assert summary.currency == "USD"
-    assert summary.total_cost == 0.0
+    assert summary.currency is None
+    assert summary.total_cost is None
+    assert summary.cost_by_currency == {}
 

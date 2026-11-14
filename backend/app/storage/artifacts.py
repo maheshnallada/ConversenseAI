@@ -77,10 +77,11 @@ class LocalArtifactStore(ArtifactStore):
         self.base_dir = target_dir.resolve()
         try:
             self.base_dir.mkdir(parents=True, exist_ok=True)
-            # Test write access to catch read-only mounts (e.g. Errno 30)
-            test_file = self.base_dir / ".write_test"
-            test_file.touch(exist_ok=True)
-            test_file.unlink(missing_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=self.base_dir,
+                prefix=".write_test_",
+            ):
+                pass
         except OSError:
             # Fallback to temp directory if base_dir is read-only
             fallback = Path(tempfile.gettempdir()) / "conversense_artifacts"

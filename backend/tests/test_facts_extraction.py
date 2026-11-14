@@ -25,6 +25,16 @@ def test_explicit_no_policy_takes_precedence_over_company_mention():
     assert result.details["existing_policy"] == "None"
 
 
+def test_explicit_no_policy_variants_precede_company_policy_matches():
+    for text in ("I have no company policy.", "I do not have an employer policy."):
+        result = FactsExtractionEvaluator().evaluate(
+            _envelope(),
+            [_customer_turn(text)],
+        )
+
+        assert result.details["existing_policy"] == "None"
+
+
 def test_incidental_me_words_do_not_imply_self_needs_cover():
     for text in ("Tell me about cover.", "I need some help."):
         result = FactsExtractionEvaluator().evaluate(_envelope(), [_customer_turn(text)])

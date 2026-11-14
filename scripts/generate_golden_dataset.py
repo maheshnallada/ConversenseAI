@@ -1,5 +1,7 @@
+import argparse
 import csv
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -67,74 +69,206 @@ golden_rows = [
     ["call_50", "Call reached an ending", "Not interested", "Customer said 'nahi nahi lekar kahi'.", "Negative", "Disengaged", "OK", 5, "Customer declined repeatedly.", "None"],
 ]
 
-root = Path(".")
-golden_csv = root / "data" / "golden_dataset.csv"
-
-# Build reply wait check for 20 calls
-reply_check_calls = [
+REPLY_CHECK_CALLS = (
     "call_01", "call_02", "call_03", "call_04", "call_05",
     "call_06", "call_07", "call_08", "call_09", "call_10",
     "call_11", "call_12", "call_14", "call_15", "call_16",
     "call_17", "call_18", "call_19", "call_20", "call_21",
+)
+GOLDEN_HEADERS = [
+    "Call",
+    "What happened",
+    "Correct outcome",
+    "Facts the customer gave",
+    "Sentiment",
+    "Emotion",
+    "Overall",
+    "First thing wrong: line",
+    "First thing wrong: what",
+    "Never-rule broken",
+]
+REPLY_HEADERS = [
+    "Call",
+    "Customer last word (s)",
+    "Agent first sound (s)",
+    "Gap (s)",
+    "Turn index",
+    "Notes",
 ]
 
-reply_rows = []
-for cid in reply_check_calls:
-    cfile = root / "data" / "calls" / cid / "call.json"
-    with open(cfile, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    messages = data.get("messages") or []
-    
-    pair = None
-    turn_idx = None
-    for j in range(len(messages) - 1):
-        if messages[j].get("role") == "user" and messages[j+1].get("role") == "assistant":
-            pair = (messages[j], messages[j+1])
-            turn_idx = messages[j].get("metadata", {}).get("turn", j+1)
-            break
-    if pair:
-        m1, m2 = pair
-        t1 = float(m1.get("t", 0.0))
-        dur = float(m1.get("metadata", {}).get("audio_s", 1.0) or 1.0)
-        cust_last = round(t1 + dur, 2)
-        t2 = float(m2.get("t", 0.0))
-        agent_first = round(t2, 2)
-        gap = round(max(0.0, agent_first - cust_last), 2)
-        reply_rows.append([cid, cust_last, agent_first, gap, turn_idx, "Customer speech end to agent audio start"])
 
-reply_csv = root / "data" / "reply_wait_check_20_calls.csv"
-with open(reply_csv, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow(["Call", "Customer last word (s)", "Agent first sound (s)", "Gap (s)", "Turn index", "Notes"])
-    for r in reply_rows:
-        writer.writerow(r)
+def _read_turn_manifest(folder: Path, filename: str) -> dict[str, dict]:
+    manifest_path = folder / filename
+    if not manifest_path.is_file():
+        return {}
 
-fd, golden_temp_path = tempfile.mkstemp(
-    prefix=f".{golden_csv.name}.",
-    suffix=".tmp",
-    dir=golden_csv.parent,
-)
-try:
-    with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "Call",
-            "What happened",
-            "Correct outcome",
-            "Facts the customer gave",
-            "Sentiment",
-            "Emotion",
-            "Overall",
-            "First thing wrong: line",
-            "First thing wrong: what",
-            "Never-rule broken",
-        ])
-        for r in golden_rows:
-            writer.writerow(r)
-    os.replace(golden_temp_path, golden_csv)
-finally:
-    if os.path.exists(golden_temp_path):
-        os.unlink(golden_temp_path)
+    turns = {}
+    with manifest_path.open("r", encoding="utf-8", errors="replace") as file:
+        for line in file:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            if not isinstance(item, dict):
+                raise ValueError(f"Invalid record in {manifest_path}")
+            turn = item.get("turn")
+            if turn is not None:
+                turns[str(turn)] = item
+    return turns
 
-print(f"Generated {len(golden_rows)} rows in {golden_csv}")
-print(f"Generated {len(reply_rows)} rows in {reply_csv}")
+
+def _seconds(value, *, call_id: str, field: str) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{call_id} has invalid {field}: {value!r}") from exc
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError(f"{call_id} has invalid {field}: {value!r}")
+    return seconds
+
+
+def _message_metadata(message: dict) -> dict:
+    metadata = message.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _build_reply_rows(calls_dir: Path) -> list[list]:
+    rows = []
+    for call_id in REPLY_CHECK_CALLS:
+        folder = calls_dir / call_id
+        call_json = folder / "call.json"
+        if not call_json.is_file():
+            raise FileNotFoundError(f"Missing call data: {call_json}")
+
+        with call_json.open("r", encoding="utf-8") as file:
+            call_data = json.load(file)
+        if not isinstance(call_data, dict):
+            raise ValueError(f"Call data must be an object: {call_json}")
+
+        messages = call_data.get("messages") or []
+        if not isinstance(messages, list):
+            raise ValueError(f"Call messages must be a list: {call_json}")
+
+        user_manifest = _read_turn_manifest(folder, "manifest.jsonl")
+        agent_manifest = _read_turn_manifest(folder, "agent_manifest.jsonl")
+        pair = None
+        for index in range(len(messages) - 1):
+            user_message = messages[index]
+            agent_message = messages[index + 1]
+            if not isinstance(user_message, dict) or not isinstance(agent_message, dict):
+                raise ValueError(f"Invalid message in {call_json}")
+            if user_message.get("role") == "user" and agent_message.get("role") == "assistant":
+                pair = (user_message, agent_message)
+                break
+
+        if pair is None:
+            continue
+
+        user_message, agent_message = pair
+        user_metadata = _message_metadata(user_message)
+        user_turn = user_metadata.get("turn")
+        user_manifest_entry = user_manifest.get(str(user_turn), {})
+        user_start = _seconds(user_message.get("t"), call_id=call_id, field="user timestamp")
+        user_audio_duration = user_metadata.get("audio_s")
+        if user_audio_duration is not None:
+            customer_end = user_start + _seconds(
+                user_audio_duration, call_id=call_id, field="customer audio duration"
+            )
+        elif user_manifest_entry.get("seconds") is not None:
+            customer_end = _seconds(
+                user_manifest_entry["seconds"], call_id=call_id, field="customer speech end"
+            )
+        else:
+            customer_end = user_start
+
+        agent_metadata = _message_metadata(agent_message)
+        agent_turn = agent_metadata.get("turn")
+        agent_manifest_entry = agent_manifest.get(str(agent_turn), {})
+        agent_first_sound = agent_manifest_entry.get("at_s")
+        if agent_first_sound is None:
+            agent_first_sound = agent_message.get("t")
+        agent_first_sound = _seconds(
+            agent_first_sound, call_id=call_id, field="agent audio start"
+        )
+
+        turn_index = user_turn if user_turn is not None else index + 1
+        gap = max(0.0, agent_first_sound - customer_end)
+        rows.append(
+            [
+                call_id,
+                round(customer_end, 2),
+                round(agent_first_sound, 2),
+                round(gap, 2),
+                turn_index,
+                "Customer speech end to agent audio start",
+            ]
+        )
+    return rows
+
+
+def _write_temp_csv(output_dir: Path, filename: str, headers: list, rows: list[list]) -> Path:
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{filename}.",
+        suffix=".tmp",
+        dir=output_dir,
+    )
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+            writer.writerows(rows)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
+    return Path(temp_path)
+
+
+def main() -> None:
+    repository_root = Path(__file__).resolve().parent.parent
+    parser = argparse.ArgumentParser(description="Generate golden benchmark CSV files")
+    parser.add_argument("--data-dir", type=Path, default=None, help="Tenant call artifact directory")
+    parser.add_argument(
+        "--tenant-id",
+        default=os.getenv("TENANT_ID", "health_campaign"),
+        help="Tenant used to locate the default artifact directory",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=repository_root / "data",
+        help="Directory for generated benchmark CSV files",
+    )
+    args = parser.parse_args()
+
+    artifact_root = Path(
+        os.getenv("ARTIFACT_STORAGE_PATH")
+        or repository_root / "backend" / "storage" / "artifacts"
+    )
+    calls_dir = (args.data_dir or artifact_root / args.tenant_id).resolve()
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    reply_rows = _build_reply_rows(calls_dir)
+    golden_csv = output_dir / "golden_dataset.csv"
+    reply_csv = output_dir / "reply_wait_check_20_calls.csv"
+    temp_paths = []
+    try:
+        reply_temp = _write_temp_csv(output_dir, reply_csv.name, REPLY_HEADERS, reply_rows)
+        temp_paths.append(reply_temp)
+        golden_temp = _write_temp_csv(output_dir, golden_csv.name, GOLDEN_HEADERS, golden_rows)
+        temp_paths.append(golden_temp)
+        os.replace(reply_temp, reply_csv)
+        temp_paths.remove(reply_temp)
+        os.replace(golden_temp, golden_csv)
+        temp_paths.remove(golden_temp)
+    finally:
+        for temp_path in temp_paths:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    print(f"Generated {len(golden_rows)} rows in {golden_csv}")
+    print(f"Generated {len(reply_rows)} rows in {reply_csv}")
+
+
+if __name__ == "__main__":
+    main()

@@ -127,6 +127,34 @@ def test_different_day_booking_is_not_a_same_day_violation():
     assert result.evidence == []
 
 
+def test_invalid_booking_time_fails_with_metadata_evidence():
+    env = _envelope(
+        domain_data={
+            "meta": {"end_call": {"record": {"date": "2026-11-15", "time": "25:00"}}}
+        },
+        started_at=datetime.fromisoformat("2026-11-14T01:00:00+05:30"),
+    )
+
+    result = ComplianceEvaluator().evaluate(env, [])
+
+    assert result.label == "FAILED"
+    assert any("invalid" in evidence.reason.lower() for evidence in result.evidence)
+
+
+def test_invalid_booking_date_fails_with_metadata_evidence():
+    env = _envelope(
+        domain_data={
+            "meta": {"end_call": {"record": {"date": "not-a-date", "time": "11:00"}}}
+        },
+        started_at=datetime.fromisoformat("2026-11-14T01:00:00+05:30"),
+    )
+
+    result = ComplianceEvaluator().evaluate(env, [])
+
+    assert result.label == "FAILED"
+    assert any("invalid" in evidence.reason.lower() for evidence in result.evidence)
+
+
 @pytest.mark.parametrize(
     "insurer",
     ["care health", "star health", "hdfc ergo", "niva bupa", "max bupa"],

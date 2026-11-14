@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 trace_id_ctx: ContextVar[str] = ContextVar("trace_id", default="")
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")
@@ -88,7 +88,7 @@ class TraceLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         trace_id = request.headers.get("X-Trace-ID") or request.headers.get("x-trace-id") or str(uuid.uuid4())
         request_id = request.headers.get("X-Request-ID") or request.headers.get("x-request-id") or str(uuid.uuid4())
-        tenant_id = request.headers.get("X-Tenant-Id") or request.headers.get("x-tenant-id") or "health_campaign"
+        tenant_id = request.headers.get("X-Tenant-Id") or request.headers.get("x-tenant-id") or ""
 
         token_trace = trace_id_ctx.set(trace_id)
         token_req = request_id_ctx.set(request_id)
@@ -130,7 +130,11 @@ class TraceLoggingMiddleware(BaseHTTPMiddleware):
                     "client_ip": client_ip,
                 },
             )
-            raise
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal Server Error"},
+                headers={"X-Trace-ID": trace_id, "X-Request-ID": request_id},
+            )
         finally:
             trace_id_ctx.reset(token_trace)
             request_id_ctx.reset(token_req)

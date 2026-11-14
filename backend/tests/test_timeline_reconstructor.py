@@ -8,7 +8,7 @@ from app.storage.db import create_session_factory, init_db
 from app.storage.timeline_repo import TimelineRepository
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CALLS_DIR = PROJECT_ROOT / "data" / "calls"
+CALLS_DIR = PROJECT_ROOT / "backend" / "storage" / "artifacts" / "health_campaign"
 
 
 def _factory():

@@ -1,16 +1,19 @@
 import io
 import json
 import logging
+import shutil
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
 
 from app.api.app import UploadFilesRequest, create_app
+import app.api.app as api_module
 from app.core.logging import StructuredJsonFormatter, TraceLoggingMiddleware, configure_logging, get_logger
 from app.storage.db import create_session_factory, init_db
 
@@ -91,6 +94,55 @@ def test_find_call_folder_variants(app_and_factory):
         assert (found / "call.json").exists()
 
 
+def test_find_call_folder_rejects_existing_directory_outside_trusted_roots(app_and_factory, tmp_path):
+    _, factory = app_and_factory
+    from app.evaluation.service import EvaluationService
+
+    outside_folder = tmp_path / "call_external"
+    outside_folder.mkdir()
+    (outside_folder / "call.json").write_text('{"call_id": "external"}', encoding="utf-8")
+    service = EvaluationService(factory)
+
+    with pytest.raises(FileNotFoundError):
+        service._find_call_folder(outside_folder, tenant_id="health_campaign")
+
+
+def test_unhandled_exception_response_includes_trace_headers():
+    app = FastAPI()
+    app.add_middleware(TraceLoggingMiddleware)
+
+    @app.get("/raises")
+    def raise_error():
+        raise RuntimeError("unexpected failure")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get(
+        "/raises",
+        headers={"X-Trace-ID": "trace-test", "X-Request-ID": "request-test"},
+    )
+
+    assert response.status_code == 500
+    assert response.headers["X-Trace-ID"] == "trace-test"
+    assert response.headers["X-Request-ID"] == "request-test"
+
+
+def test_upload_files_rejects_folder_name_that_escapes_staging(
+    app_and_factory, tmp_path, monkeypatch
+):
+    app, _ = app_and_factory
+    monkeypatch.chdir(tmp_path)
+    route = next(r for r in app.routes if r.path == "/api/v1/interactions/upload-files")
+    request = UploadFilesRequest(
+        folder_name="../outside",
+        call_json='{"call_id": "should_not_be_written"}',
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        route.endpoint(body=request, tenant_id="test_upload_tenant")
+
+    assert exc_info.value.status_code == 400
+    assert not (tmp_path / "backend" / "storage" / "outside" / "call.json").exists()
+
 
 def test_upload_files_json_endpoint(app_and_factory):
     app, factory = app_and_factory
@@ -110,6 +162,8 @@ def test_upload_files_json_endpoint(app_and_factory):
         call_log="2026-11-14 Call started\n2026-11-14 Call ended\n",
         tenant_id=test_tenant,
     )
+    staging_dir = api_module.UPLOAD_ROOT / test_tenant / "test_upload_01"
+    shutil.rmtree(staging_dir, ignore_errors=True)
 
     try:
         res = route.endpoint(body=req, tenant_id=test_tenant)
@@ -125,3 +179,4 @@ def test_upload_files_json_endpoint(app_and_factory):
             session.execute(text("DELETE FROM interaction_turns WHERE tenant_id = 'test_upload_tenant'"))
             session.execute(text("DELETE FROM observability_metrics WHERE tenant_id = 'test_upload_tenant'"))
             session.commit()
+        shutil.rmtree(staging_dir, ignore_errors=True)

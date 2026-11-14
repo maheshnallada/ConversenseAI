@@ -126,6 +126,16 @@ def test_outcome_evaluator_call_screening_or_machine(message):
     assert result.label == "Call screener or machine"
 
 
+def test_machine_only_call_is_not_classified_as_no_agent_audio():
+    message = "This is an automated recording."
+    turn = TranscriptTurn("t1", "c_machine", "ten1", 1, "customer", message, message.lower())
+
+    result = OutcomeEvaluator().evaluate(_envelope("c_machine"), [turn])
+
+    assert result.details["what_happened"] == "Machine or call screener answered"
+    assert result.details["correct_outcome"] == "Call screener or machine"
+
+
 def test_generic_insurance_confirmation_is_not_an_expert_booking():
     evaluator = OutcomeEvaluator()
     turns = [

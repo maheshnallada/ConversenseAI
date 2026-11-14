@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { Search, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
 
@@ -8,6 +8,8 @@ export default function InteractionsView({ onInspectCall }) {
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const requestId = useRef(0);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -20,7 +22,12 @@ export default function InteractionsView({ onInspectCall }) {
   }, [page, outcome, quality, status]);
 
   async function loadInteractions(p = 1) {
+    const currentRequestId = ++requestId.current;
     setLoading(true);
+    setError(null);
+    setItems([]);
+    setTotal(0);
+    setPages(1);
     try {
       const params = { page: p, page_size: 10 };
       if (search) params.search = search;
@@ -29,20 +36,24 @@ export default function InteractionsView({ onInspectCall }) {
       if (status) params.status = status;
 
       const data = await api.getInteractionsPage(params);
+      if (currentRequestId !== requestId.current) return;
       setItems(data.items || []);
       setTotal(data.total || 0);
       setPages(data.pages || 1);
       setPage(data.page || 1);
     } catch (e) {
+      if (currentRequestId !== requestId.current) return;
       console.error('Failed to load interactions:', e);
+      setError(e.message || 'Failed to load interactions.');
     } finally {
-      setLoading(false);
+      if (currentRequestId === requestId.current) setLoading(false);
     }
   }
 
   function handleSearchSubmit(e) {
     e.preventDefault();
-    loadInteractions(1);
+    if (page !== 1) setPage(1);
+    else loadInteractions(1);
   }
 
   const getQualityBadge = (q) => {
@@ -73,7 +84,7 @@ export default function InteractionsView({ onInspectCall }) {
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <select
             value={outcome}
-            onChange={(e) => setOutcome(e.target.value)}
+            onChange={(e) => { setOutcome(e.target.value); setPage(1); }}
             className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 text-xs text-slate-800 dark:text-slate-300 focus:outline-none focus:border-cyan-500 font-sans"
           >
             <option value="">All Outcomes</option>
@@ -87,7 +98,7 @@ export default function InteractionsView({ onInspectCall }) {
 
           <select
             value={quality}
-            onChange={(e) => setQuality(e.target.value)}
+            onChange={(e) => { setQuality(e.target.value); setPage(1); }}
             className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 text-xs text-slate-800 dark:text-slate-300 focus:outline-none focus:border-cyan-500 font-sans"
           >
             <option value="">All Quality</option>
@@ -98,7 +109,7 @@ export default function InteractionsView({ onInspectCall }) {
 
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
             className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 text-xs text-slate-800 dark:text-slate-300 focus:outline-none focus:border-cyan-500 font-sans"
           >
             <option value="">All Statuses</option>
@@ -131,6 +142,18 @@ export default function InteractionsView({ onInspectCall }) {
                   <td colSpan="9" className="py-12 text-center text-slate-500 dark:text-slate-400">
                     <div className="inline-block w-6 h-6 rounded-full border-2 border-cyan-500/20 border-t-cyan-500 animate-spin mb-2"></div>
                     <div>Loading call interactions...</div>
+                  </td>
+                </tr>
+              ) : error ? (
+                <tr>
+                  <td colSpan="9" className="py-12 text-center text-rose-600 dark:text-rose-400">
+                    <p>{error}</p>
+                    <button
+                      onClick={() => loadInteractions(page)}
+                      className="mt-2 px-3 py-1 rounded-lg bg-rose-100 dark:bg-rose-950/60 font-semibold"
+                    >
+                      Retry
+                    </button>
                   </td>
                 </tr>
               ) : items.length === 0 ? (
@@ -176,7 +199,7 @@ export default function InteractionsView({ onInspectCall }) {
                       {item.sentiment || 'Neutral'}
                     </td>
                     <td className="py-3.5 px-4 font-mono text-amber-600 dark:text-amber-400 font-medium">
-                      ${item.cost_usd ? item.cost_usd.toFixed(4) : '0.0000'}
+                      {item.cost_usd == null ? 'N/A' : `$${item.cost_usd.toFixed(4)}`}
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       <button

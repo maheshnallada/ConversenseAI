@@ -19,7 +19,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default=str(Path(__file__).resolve().parent.parent / "data" / "calls"),
+        default=None,
         help="Path to calls directory",
     )
     parser.add_argument(
@@ -57,9 +57,18 @@ def main():
     print(f"Initializing artifact store at: {args.artifacts_dir}")
     store = LocalArtifactStore(base_dir=args.artifacts_dir)
 
-    print(f"Starting batch import from {args.data_dir} for tenant '{args.tenant_id}'...")
+    artifact_root = Path(args.artifacts_dir)
+    data_dir = (
+        Path(args.data_dir).resolve()
+        if args.data_dir
+        else (artifact_root / args.tenant_id).resolve()
+    )
+    if not data_dir.is_dir():
+        raise FileNotFoundError(f"Calls directory does not exist: {data_dir}")
+
+    print(f"Starting batch import from {data_dir} for tenant '{args.tenant_id}'...")
     importer = BatchImporter(session_factory=factory, artifact_store=store, tenant_id=args.tenant_id)
-    result = importer.import_directory(args.data_dir)
+    result = importer.import_directory(data_dir)
 
     print(f"\nImport Completed in {result.run_id}:")
     print(f"  Total Calls: {result.total_calls}")

@@ -10,7 +10,7 @@ from app.storage.orm import ObservabilityMetricsRow
 from app.storage.observability_repo import ObservabilityRepository
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CALLS_DIR = PROJECT_ROOT / "data" / "calls"
+CALLS_DIR = PROJECT_ROOT / "backend" / "storage" / "artifacts" / "health_campaign"
 
 
 def test_full_dataset_metrics_calculation():
@@ -41,7 +41,7 @@ def test_full_dataset_metrics_calculation():
     assert summary.total_turns == 399
     assert summary.total_agent_turns == 230
     assert summary.total_customer_turns == 169
-    assert summary.total_recording_duration_s > 2500.0  # Phase 0 noted 2,659.3s
+    assert summary.total_recording_duration_s == pytest.approx(1960.29)
     assert summary.total_telephony_duration_s > 2000.0
     # Two duration clocks are different
     assert summary.total_recording_duration_s != summary.total_telephony_duration_s

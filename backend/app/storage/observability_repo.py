@@ -14,6 +14,24 @@ from app.observability.config import CostBreakdown
 from app.storage.orm import ObservabilityMetricsRow
 
 
+def aggregate_cost_rows(rows: list[ObservabilityMetricsRow]) -> tuple[float | None, str | None, dict[str, float]]:
+    cost_by_currency: dict[str, float] = {}
+    for row in rows:
+        if row.total_cost is None:
+            continue
+        currency = (row.cost_currency or "").strip() or "UNKNOWN"
+        cost_by_currency[currency] = cost_by_currency.get(currency, 0.0) + row.total_cost
+
+    cost_by_currency = {
+        currency: round(total, 4)
+        for currency, total in cost_by_currency.items()
+    }
+    if len(cost_by_currency) == 1 and "UNKNOWN" not in cost_by_currency:
+        currency, total = next(iter(cost_by_currency.items()))
+        return total, currency, cost_by_currency
+    return None, None, cost_by_currency
+
+
 class ObservabilityRepository:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
@@ -138,16 +156,7 @@ class ObservabilityRepository:
             total_overlap_dur = sum(r.total_overlap_s for r in rows)
             total_in_tok = sum(r.input_tokens or 0 for r in rows)
             total_out_tok = sum(r.output_tokens or 0 for r in rows)
-            currencies = {r.cost_currency for r in rows}
-            if not rows:
-                currency = "USD"
-                total_cost = 0.0
-            elif len(currencies) > 1:
-                currency = "MIXED"
-                total_cost = None
-            else:
-                currency = next(iter(currencies))
-                total_cost = round(sum(r.total_cost or 0.0 for r in rows), 4)
+            total_cost, currency, cost_by_currency = aggregate_cost_rows(rows)
 
             latencies = []
             for row in rows:
@@ -169,5 +178,6 @@ class ObservabilityRepository:
                 total_output_tokens=total_out_tok,
                 total_cost=total_cost,
                 currency=currency,
+                cost_by_currency=cost_by_currency,
             )
 

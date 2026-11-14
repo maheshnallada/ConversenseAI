@@ -286,9 +286,6 @@ class OutcomeEvaluator(BaseEvaluator):
         agent_turns: List[TranscriptTurn],
         timeline: Optional[ReconstructedTimeline],
     ):
-        if not agent_turns:
-            return "Heard nothing from the agent", []
-
         # If machine
         for ct in customer_turns:
             text = (ct.normalized_text or ct.raw_text).lower()
@@ -315,6 +312,9 @@ class OutcomeEvaluator(BaseEvaluator):
                     text_snippet=ct.raw_text,
                     reason="Machine greeting detected"
                 )]
+
+        if not agent_turns:
+            return "Heard nothing from the agent", []
 
         # Check late agent opening (> 3.0s)
         if timeline and getattr(timeline, "first_agent_speech_s", 0) and timeline.first_agent_speech_s > 3.0:

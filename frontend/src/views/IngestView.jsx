@@ -16,7 +16,7 @@ export default function IngestView({ onNavigateToDrillDown }) {
   const [activeTab, setActiveTab] = useState('path'); // 'path' or 'upload' or 'seed'
 
   // Server path state
-  const [folderPath, setFolderPath] = useState('data/calls/call_01');
+  const [folderPath, setFolderPath] = useState('backend/storage/artifacts/health_campaign/call_01');
 
   // ZIP upload state
   const [selectedFile, setSelectedFile] = useState(null);
@@ -31,11 +31,11 @@ export default function IngestView({ onNavigateToDrillDown }) {
 
   // Quick selection chips
   const quickPaths = [
-    'data/calls/call_01',
-    'data/calls/call_18',
-    'data/calls/call_05',
-    'data/calls/call_12',
-    'data/calls/call_33',
+    'backend/storage/artifacts/health_campaign/call_01',
+    'backend/storage/artifacts/health_campaign/call_18',
+    'backend/storage/artifacts/health_campaign/call_05',
+    'backend/storage/artifacts/health_campaign/call_12',
+    'backend/storage/artifacts/health_campaign/call_33',
   ];
 
   const handleFileDrop = (e) => {

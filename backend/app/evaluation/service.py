@@ -34,6 +34,7 @@ class EvaluationService:
         registry: Optional[EvaluatorRegistry] = None,
         artifact_store: Optional[LocalArtifactStore] = None,
         rate_card_manager: Optional[RateCardManager] = None,
+        trusted_call_roots: list[Path | str] | None = None,
     ):
         self.session_factory = session_factory
         self.registry = registry or EvaluatorRegistry()
@@ -51,6 +52,9 @@ class EvaluationService:
         )
         self.artifact_store = artifact_store or LocalArtifactStore(artifact_root)
         self.rate_card_manager = rate_card_manager or RateCardManager(root / "configs" / "rate_cards.json")
+        self.trusted_call_roots = [
+            Path(path).resolve() for path in (trusted_call_roots or [])
+        ]
         self.obs_service = ObservabilityService(session_factory, self.rate_card_manager)
         self.processor = TranscriptProcessor()
         self.reconstructor = TimelineReconstructor()
@@ -87,26 +91,50 @@ class EvaluationService:
     def _find_call_folder(
         self, call_folder_path: Path | str, tenant_id: str | None = None
     ) -> Path:
-        raw_path = Path(str(call_folder_path).strip().replace("\\", "/"))
-        if raw_path.exists() and raw_path.is_dir():
-            return raw_path.resolve()
-
-        root = Path(__file__).resolve().parent.parent.parent.parent
+        raw_path = Path(str(call_folder_path).strip())
         effective_tenant = tenant_id or os.getenv("TENANT_ID", "health_campaign")
+        root = Path(__file__).resolve().parent.parent.parent.parent
+        artifact_root = self.artifact_store.base_dir.resolve()
+        tenant_artifact_root = (artifact_root / effective_tenant).resolve()
+        uploads_root = (root / "backend" / "storage" / "uploads" / effective_tenant).resolve()
         candidate_roots = [
-            root / "data" / "calls",
-            root / "backend" / "storage" / "uploads",
-            self.artifact_store.base_dir / effective_tenant,
-            Path("/app/data/calls"),
+            (root / "data" / "calls").resolve(),
+            uploads_root,
+            tenant_artifact_root,
+            Path("/app/data/calls").resolve(),
+            *self.trusted_call_roots,
         ]
+
+        if not tenant_artifact_root.is_relative_to(artifact_root):
+            raise FileNotFoundError(f"Call folder not found: '{call_folder_path}'")
+        if not uploads_root.is_relative_to((root / "backend" / "storage" / "uploads").resolve()):
+            raise FileNotFoundError(f"Call folder not found: '{call_folder_path}'")
+
         for candidate_root in candidate_roots:
-            for candidate in (candidate_root / raw_path, candidate_root / raw_path.name):
-                if candidate.is_dir():
-                    return candidate.resolve()
-            if candidate_root.is_dir():
-                for call_json in candidate_root.rglob("call.json"):
-                    if call_json.parent.name == raw_path.name:
-                        return call_json.parent.resolve()
+            if not candidate_root.is_dir():
+                continue
+            candidates = [raw_path] if raw_path.is_absolute() else [
+                candidate_root / raw_path,
+                candidate_root / raw_path.name,
+            ]
+            for candidate in candidates:
+                try:
+                    resolved = candidate.resolve(strict=True)
+                except FileNotFoundError:
+                    continue
+                if (
+                    resolved.is_dir()
+                    and resolved.is_relative_to(candidate_root)
+                    and (resolved / "call.json").is_file()
+                ):
+                    return resolved
+            for call_json in candidate_root.rglob("call.json"):
+                call_folder = call_json.parent.resolve()
+                if (
+                    call_folder.is_relative_to(candidate_root)
+                    and call_folder.name == raw_path.name
+                ):
+                    return call_folder
 
         raise FileNotFoundError(f"Call folder not found: '{call_folder_path}'")
 
@@ -143,7 +171,7 @@ class EvaluationService:
     def process_and_evaluate_folder(
         self,
         call_folder_path: Path | str,
-        tenant_id: str = "health_campaign",
+        tenant_id: str | None = None,
     ) -> Dict[str, Any]:
         """
         End-to-end on-demand pipeline:
@@ -153,6 +181,7 @@ class EvaluationService:
         4. Calculate observability metrics & cost
         5. Run full evaluation suite
         """
+        tenant_id = tenant_id or os.getenv("TENANT_ID", "health_campaign")
         folder = self._find_call_folder(call_folder_path, tenant_id)
 
         # Step 1: Ingestion

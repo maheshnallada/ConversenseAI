@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import sessionmaker
 
 from app.storage.orm import HumanReviewRow, EvaluationResultRow
@@ -29,7 +29,10 @@ class HumanReviewRepository:
                     EvaluationResultRow.tenant_id == tenant_id,
                     EvaluationResultRow.interaction_id == interaction_id,
                     EvaluationResultRow.evaluator_id == evaluator_id,
-                )
+                ).order_by(
+                    desc(EvaluationResultRow.created_at),
+                    desc(EvaluationResultRow.id),
+                ).limit(1)
             )
             if eval_row:
                 if not original_label:
