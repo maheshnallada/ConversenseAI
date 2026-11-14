@@ -1,5 +1,7 @@
 import csv
 import json
+import os
+import tempfile
 from pathlib import Path
 
 # Build 50 calls golden dataset
@@ -67,24 +69,6 @@ golden_rows = [
 
 root = Path(".")
 golden_csv = root / "data" / "golden_dataset.csv"
-with open(golden_csv, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow([
-        "Call",
-        "What happened",
-        "Correct outcome",
-        "Facts the customer gave",
-        "Sentiment",
-        "Emotion",
-        "Overall",
-        "First thing wrong: line",
-        "First thing wrong: what",
-        "Never-rule broken",
-    ])
-    for r in golden_rows:
-        writer.writerow(r)
-
-print(f"Generated {len(golden_rows)} rows in {golden_csv}")
 
 # Build reply wait check for 20 calls
 reply_check_calls = [
@@ -99,7 +83,7 @@ for cid in reply_check_calls:
     cfile = root / "data" / "calls" / cid / "call.json"
     with open(cfile, "r", encoding="utf-8") as f:
         data = json.load(f)
-    messages = data.get("messages", [])
+    messages = data.get("messages") or []
     
     pair = None
     turn_idx = None
@@ -125,4 +109,32 @@ with open(reply_csv, "w", newline="", encoding="utf-8") as f:
     for r in reply_rows:
         writer.writerow(r)
 
+fd, golden_temp_path = tempfile.mkstemp(
+    prefix=f".{golden_csv.name}.",
+    suffix=".tmp",
+    dir=golden_csv.parent,
+)
+try:
+    with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Call",
+            "What happened",
+            "Correct outcome",
+            "Facts the customer gave",
+            "Sentiment",
+            "Emotion",
+            "Overall",
+            "First thing wrong: line",
+            "First thing wrong: what",
+            "Never-rule broken",
+        ])
+        for r in golden_rows:
+            writer.writerow(r)
+    os.replace(golden_temp_path, golden_csv)
+finally:
+    if os.path.exists(golden_temp_path):
+        os.unlink(golden_temp_path)
+
+print(f"Generated {len(golden_rows)} rows in {golden_csv}")
 print(f"Generated {len(reply_rows)} rows in {reply_csv}")

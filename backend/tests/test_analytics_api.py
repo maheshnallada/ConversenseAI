@@ -29,24 +29,24 @@ def test_section_11_routes_exist(app_instance):
 def test_route_handlers_logic(app_instance):
     # Verify overview analytics handler
     overview_route = next(r for r in app_instance.routes if r.path == "/api/v1/analytics/overview")
-    overview = overview_route.endpoint()
+    overview = overview_route.endpoint(tenant_id="health_campaign")
     assert overview["total_interactions"] == 50
     assert overview["total_cost_usd"] > 0
 
     # Verify quality analytics handler
     quality_route = next(r for r in app_instance.routes if r.path == "/api/v1/analytics/quality")
-    quality = quality_route.endpoint()
+    quality = quality_route.endpoint(tenant_id="health_campaign")
     assert "outcomes" in quality
 
     # Verify interactions pagination handler
     interactions_route = next(r for r in app_instance.routes if r.path == "/api/v1/interactions" and "GET" in r.methods)
-    page = interactions_route.endpoint(page=1, page_size=10, status=None, outcome=None, quality=None, search=None, x_tenant_id=None)
+    page = interactions_route.endpoint(page=1, page_size=10, status=None, outcome=None, quality=None, search=None, tenant_id="health_campaign")
     assert page["total"] == 50
     assert len(page["items"]) == 10
 
     # Verify timeline handler for call_01
     timeline_route = next(r for r in app_instance.routes if r.path == "/api/v1/interactions/{interaction_id}/timeline")
-    timeline = timeline_route.endpoint(interaction_id="call_01", x_tenant_id=None)
+    timeline = timeline_route.endpoint(interaction_id="call_01", tenant_id="health_campaign")
     assert "events" in timeline
     assert timeline["agent_turn_count"] > 0
 
@@ -59,10 +59,10 @@ def test_route_handlers_logic(app_instance):
         review_decision="ACCEPTED",
         notes="Reviewed and accepted automated classification.",
     )
-    res = review_post.endpoint(interaction_id="call_01", body=sub, x_tenant_id=None)
+    res = review_post.endpoint(interaction_id="call_01", body=sub, tenant_id="health_campaign")
     assert res["reviewed_label"] == "Not interested"
 
     # Verify list reviews handler
     review_get = next(r for r in app_instance.routes if r.path == "/api/v1/interactions/{interaction_id}/reviews" and "GET" in r.methods)
-    reviews_list = review_get.endpoint(interaction_id="call_01", x_tenant_id=None)
+    reviews_list = review_get.endpoint(interaction_id="call_01", tenant_id="health_campaign")
     assert len(reviews_list) >= 1

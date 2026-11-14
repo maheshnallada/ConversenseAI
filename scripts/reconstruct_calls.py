@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,11 @@ from app.storage.timeline_repo import TimelineRepository
 from app.validation.audio import validate_call_files
 
 
+def _connected_seconds(call_data):
+    usage = (call_data.get("meta") or {}).get("usage") or {}
+    return (usage.get("line") or {}).get("connected_s")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Conversense AI - Call Timeline Reconstructor")
     parser.add_argument(
@@ -26,7 +32,7 @@ def main():
     parser.add_argument(
         "--tenant-id",
         type=str,
-        default="health_campaign",
+        default=os.getenv("TENANT_ID", "health_campaign"),
         help="Tenant ID for timeline records",
     )
     parser.add_argument(
@@ -73,7 +79,7 @@ def main():
         call_meta = {
             "agent_wav_count": val.agent_wav_count,
             "end_reason": call_data.get("end_reason"),
-            "connected_s": call_data.get("meta", {}).get("usage", {}).get("line", {}).get("connected_s"),
+            "connected_s": _connected_seconds(call_data),
         }
 
         turns = processor.process_folder(folder, tenant_id=args.tenant_id)

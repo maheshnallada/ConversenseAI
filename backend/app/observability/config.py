@@ -56,7 +56,7 @@ class RateCardManager:
             "currency": "USD",
             "rates": {
                 "llm": {
-                    "gemini-3.5-flash-lite": {"input_per_1m": 0.075, "output_per_1m": 0.30},
+                    "gemini-3.5-flash-lite": {"input_per_1m": 0.30, "output_per_1m": 2.50},
                     "gpt-4o-mini": {"input_per_1m": 0.15, "output_per_1m": 0.60},
                 },
                 "stt": {"pulse": {"per_minute": 0.006}},
@@ -73,6 +73,8 @@ class RateCardManager:
     ) -> float | None:
         if not model_name or input_tokens is None or output_tokens is None:
             return None
+        if input_tokens < 0 or output_tokens < 0:
+            return None
 
         clean_model = model_name.lower().split("/")[-1].strip()
         llm_rates = self.rates.get("llm", {})
@@ -81,7 +83,7 @@ class RateCardManager:
         if not rate:
             # Check prefix match
             for k, v in llm_rates.items():
-                if k in clean_model:
+                if clean_model.startswith(k):
                     rate = v
                     break
 

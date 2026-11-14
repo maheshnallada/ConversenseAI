@@ -7,8 +7,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CALLS_DIR = PROJECT_ROOT / "data" / "calls"
 
 
+def _call_dir(call_id: str) -> Path:
+    call_dir = CALLS_DIR / call_id
+    if not call_dir.is_dir():
+        pytest.skip("External call dataset is unavailable")
+    return call_dir
+
+
 def test_process_call_01_standard():
-    call_dir = CALLS_DIR / "call_01"
+    call_dir = _call_dir("call_01")
     processor = TranscriptProcessor()
     turns = processor.process_folder(call_dir, tenant_id="tenant_test")
 
@@ -42,7 +49,7 @@ def test_process_call_01_standard():
 
 
 def test_process_call_05_studio_no_spoken_marks():
-    call_dir = CALLS_DIR / "call_05"
+    call_dir = _call_dir("call_05")
     processor = TranscriptProcessor()
     turns = processor.process_folder(call_dir, tenant_id="tenant_test")
 
@@ -56,7 +63,7 @@ def test_process_call_05_studio_no_spoken_marks():
 
 
 def test_process_call_13_silent_call():
-    call_dir = CALLS_DIR / "call_13"
+    call_dir = _call_dir("call_13")
     processor = TranscriptProcessor()
     turns = processor.process_folder(call_dir, tenant_id="tenant_test")
     # call_13 has 0 messages

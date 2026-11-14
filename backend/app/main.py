@@ -8,22 +8,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./conversense.sqlite3")
 session_factory = create_session_factory(DATABASE_URL)
 init_db(session_factory)
 
-# Auto-seed golden dataset labels if empty
-try:
-    from pathlib import Path
-    from app.storage.golden_repo import GoldenDatasetRepository
-    from app.validation.golden_loader import load_golden_dataset
-
-    golden_repo = GoldenDatasetRepository(session_factory)
-    if not golden_repo.get_all():
-        for cand in [Path("data/golden_dataset.csv"), Path(__file__).resolve().parent.parent.parent / "data" / "golden_dataset.csv"]:
-            if cand.exists():
-                labels = load_golden_dataset(cand)
-                golden_repo.save_many(labels)
-                break
-except Exception:
-    pass
-
 app = create_app(session_factory)
 
 

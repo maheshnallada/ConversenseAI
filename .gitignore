@@ -13,3 +13,4 @@ Calls_/
 .env
 __pycache__/
 .vscode/
+.idea/

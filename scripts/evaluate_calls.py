@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 import sys
 from pathlib import Path
 from collections import Counter
@@ -24,7 +26,7 @@ def main():
     parser.add_argument(
         "--tenant-id",
         type=str,
-        default="health_campaign",
+        default=os.getenv("TENANT_ID", "health_campaign"),
         help="Tenant ID for calls",
     )
     parser.add_argument(
@@ -59,10 +61,11 @@ def main():
     facts_extracted_total = 0
 
     for folder in call_folders:
-        call_name = folder.name
+        with open(folder / "call.json", "r", encoding="utf-8") as f:
+            call_id = json.load(f)["call_id"]
         results = service.evaluate_interaction(
             tenant_id=args.tenant_id,
-            interaction_id=call_name,
+            interaction_id=call_id,
         )
         total_evaluated += 1
 

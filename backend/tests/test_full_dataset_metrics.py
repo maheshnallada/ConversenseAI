@@ -41,7 +41,7 @@ def test_full_dataset_metrics_calculation():
     assert summary.total_turns == 399
     assert summary.total_agent_turns == 230
     assert summary.total_customer_turns == 169
-    assert summary.total_recording_duration_s > 1800.0  # Telephony audio recordings updated from Calls_ (~1,960.3s)
+    assert summary.total_recording_duration_s > 2500.0  # Phase 0 noted 2,659.3s
     assert summary.total_telephony_duration_s > 2000.0
     # Two duration clocks are different
     assert summary.total_recording_duration_s != summary.total_telephony_duration_s

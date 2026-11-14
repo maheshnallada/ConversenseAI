@@ -1,87 +1,160 @@
 import pytest
-from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 
-from app.api.app import create_app
-from app.domain.envelope import InteractionEnvelope
+from app.api.app import ProcessFolderRequest, create_app
 from app.storage.db import create_session_factory, init_db
 
 
-def _setup_app():
+def _client():
     factory = create_session_factory(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     init_db(factory)
-    app = create_app(factory)
-    post_route = next(r for r in app.routes if r.path == "/api/v1/interactions" and "POST" in r.methods)
-    get_route = next(r for r in app.routes if r.path == "/api/v1/interactions/{interaction_id}" and "GET" in r.methods)
-    return app, post_route.endpoint, get_route.endpoint
+    return TestClient(create_app(factory))
 
 
-def _envelope():
-    return InteractionEnvelope.model_validate({
+def _body():
+    return {
         "tenant_id": "tenant_001",
         "interaction_id": "interaction_001",
         "schema_version": "1.0",
         "use_case": "health_insurance",
         "interaction_type": "voice",
         "execution": {"input_tokens": 0, "output_tokens": 3, "cost": None},
-    })
+    }
+
+
+def test_process_folder_request_default_reads_environment_tenant(monkeypatch):
+    monkeypatch.setenv("TENANT_ID", "tenant_from_env")
+
+    request = ProcessFolderRequest(call_folder_path="call-folder")
+
+    assert request.tenant_id == "tenant_from_env"
 
 
 def test_post_then_get_round_trip():
-    app, post_fn, get_fn = _setup_app()
-    env = _envelope()
-    res = post_fn(body=env, x_tenant_id="tenant_001")
-    assert res.status_code == 201
+    client = _client()
+    created = client.post(
+        "/api/v1/interactions",
+        headers={"X-Tenant-Id": "tenant_001"},
+        json=_body(),
+    )
+    assert created.status_code == 201
+    assert created.json()["created"] is True
+    assert created.json()["interaction"]["execution"]["input_tokens"] == 0
+    assert created.json()["interaction"]["execution"]["cost"] is None
 
-    fetched = get_fn(interaction_id="interaction_001", x_tenant_id="tenant_001")
-    assert fetched.interaction_id == "interaction_001"
-    assert fetched.execution.input_tokens == 0
+    fetched = client.get(
+        "/api/v1/interactions/interaction_001",
+        headers={"X-Tenant-Id": "tenant_001"},
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["interaction_id"] == "interaction_001"
 
 
 def test_retry_returns_200_and_created_false():
-    app, post_fn, _ = _setup_app()
-    env = _envelope()
-    res1 = post_fn(body=env, x_tenant_id="tenant_001")
-    assert res1.status_code == 201
-
-    res2 = post_fn(body=env, x_tenant_id="tenant_001")
-    assert res2.status_code == 200
+    client = _client()
+    headers = {"X-Tenant-Id": "tenant_001"}
+    assert client.post("/api/v1/interactions", headers=headers, json=_body()).status_code == 201
+    replay = client.post("/api/v1/interactions", headers=headers, json=_body())
+    assert replay.status_code == 200
+    assert replay.json()["created"] is False
 
 
 def test_conflicting_replay_returns_409():
-    app, post_fn, _ = _setup_app()
-    env = _envelope()
-    post_fn(body=env, x_tenant_id="tenant_001")
-
-    changed = _envelope()
-    changed.use_case = "customer_support"
-    with pytest.raises(HTTPException) as exc_info:
-        post_fn(body=changed, x_tenant_id="tenant_001")
-    assert exc_info.value.status_code == 409
+    client = _client()
+    headers = {"X-Tenant-Id": "tenant_001"}
+    client.post("/api/v1/interactions", headers=headers, json=_body())
+    changed = _body()
+    changed["use_case"] = "customer_support"
+    conflict = client.post("/api/v1/interactions", headers=headers, json=changed)
+    assert conflict.status_code == 409
 
 
 def test_missing_tenant_header_is_rejected():
-    app, post_fn, _ = _setup_app()
-    with pytest.raises(HTTPException) as exc_info:
-        post_fn(body=_envelope(), x_tenant_id=None)
-    assert exc_info.value.status_code == 401
+    client = _client()
+    response = client.post("/api/v1/interactions", json=_body())
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/api/v1/interactions", _body()),
+        ("GET", "/api/v1/interactions/interaction_001", None),
+        ("GET", "/api/v1/interactions-list", None),
+        ("GET", "/api/v1/interactions", None),
+        ("GET", "/api/v1/interactions/interaction_001/timeline", None),
+        ("GET", "/api/v1/interactions/interaction_001/audio", None),
+        ("POST", "/api/v1/interactions/interaction_001/evaluate", None),
+        ("GET", "/api/v1/interactions/interaction_001/evaluations", None),
+        (
+            "POST",
+            "/api/v1/interactions/interaction_001/reviews",
+            {
+                "evaluator_id": "outcome.intent",
+                "reviewed_label": "Interested",
+                "reviewer_name": "Reviewer",
+            },
+        ),
+        ("GET", "/api/v1/interactions/interaction_001/reviews", None),
+        ("GET", "/api/v1/analytics/overview", None),
+        ("GET", "/api/v1/analytics/quality", None),
+        ("GET", "/api/v1/analytics/cost", None),
+        (
+            "POST",
+            "/api/v1/interactions/process-and-evaluate",
+            {"call_folder_path": "missing-call-folder"},
+        ),
+        ("POST", "/api/v1/interactions/upload-zip", None),
+        ("POST", "/api/v1/interactions/upload-files", {"call_json": "{}"}),
+        ("POST", "/api/v1/interactions/seed-all", None),
+    ],
+)
+@pytest.mark.parametrize("tenant_header", [None, ""])
+def test_all_tenant_scoped_routes_reject_missing_or_empty_header(method, path, body, tenant_header):
+    client = _client()
+    headers = {} if tenant_header is None else {"X-Tenant-Id": tenant_header}
+
+    response = client.request(method, path, headers=headers, json=body)
+
+    assert response.status_code == 401
 
 
 def test_tenant_header_must_match_body():
-    app, post_fn, _ = _setup_app()
-    with pytest.raises(HTTPException) as exc_info:
-        post_fn(body=_envelope(), x_tenant_id="tenant_002")
-    assert exc_info.value.status_code == 403
+    client = _client()
+    response = client.post(
+        "/api/v1/interactions",
+        headers={"X-Tenant-Id": "tenant_002"},
+        json=_body(),
+    )
+    assert response.status_code == 403
+
+
+def test_process_and_evaluate_rejects_body_tenant_that_conflicts_with_header():
+    client = _client()
+
+    response = client.post(
+        "/api/v1/interactions/process-and-evaluate",
+        headers={"X-Tenant-Id": "tenant_002"},
+        json={"call_folder_path": "missing-call-folder", "tenant_id": "tenant_001"},
+    )
+
+    assert response.status_code == 403
 
 
 def test_other_tenant_gets_404():
-    app, post_fn, get_fn = _setup_app()
-    post_fn(body=_envelope(), x_tenant_id="tenant_001")
-
-    with pytest.raises(HTTPException) as exc_info:
-        get_fn(interaction_id="interaction_001", x_tenant_id="tenant_002")
-    assert exc_info.value.status_code == 404
+    client = _client()
+    client.post(
+        "/api/v1/interactions",
+        headers={"X-Tenant-Id": "tenant_001"},
+        json=_body(),
+    )
+    response = client.get(
+        "/api/v1/interactions/interaction_001",
+        headers={"X-Tenant-Id": "tenant_002"},
+    )
+    assert response.status_code == 404

@@ -73,7 +73,7 @@ class QualityEvaluator(BaseEvaluator):
                             reason=first_wrong_what
                         ))
 
-        if not turns:
+        if not turns and not (compliance_result and compliance_result.label == "FAILED"):
             label = "Can't tell"
 
         score = 1.0 if label == "Good" else (0.7 if label == "OK" else 0.0)

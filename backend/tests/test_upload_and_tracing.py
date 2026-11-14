@@ -57,7 +57,7 @@ def test_structured_logging_formatter():
 def test_interactions_list_selector_route(app_and_factory):
     app, _ = app_and_factory
     route = next(r for r in app.routes if r.path == "/api/v1/interactions-list")
-    items = route.endpoint(x_tenant_id="health_campaign")
+    items = route.endpoint(tenant_id="health_campaign")
     assert len(items) >= 50
     assert any(i["folder_name"] == "call_18" for i in items)
     assert any(i["folder_name"] == "call_01" for i in items)
@@ -68,14 +68,14 @@ def test_call_18_timeline_and_audio_resolution(app_and_factory):
 
     # Verify timeline does not 404 for call_18
     timeline_route = next(r for r in app.routes if r.path == "/api/v1/interactions/{interaction_id}/timeline")
-    timeline = timeline_route.endpoint(interaction_id="call_18", x_tenant_id="health_campaign")
+    timeline = timeline_route.endpoint(interaction_id="call_18", tenant_id="health_campaign")
     assert timeline is not None
     assert len(timeline["events"]) > 0
     assert timeline["total_duration_s"] > 0
 
     # Verify audio streaming endpoint resolves file for call_18
     audio_route = next(r for r in app.routes if r.path == "/api/v1/interactions/{interaction_id}/audio")
-    audio = audio_route.endpoint(interaction_id="call_18", x_tenant_id="health_campaign")
+    audio = audio_route.endpoint(interaction_id="call_18", tenant_id="health_campaign")
     assert audio is not None
     assert Path(audio.path).exists()
 
@@ -112,7 +112,7 @@ def test_upload_files_json_endpoint(app_and_factory):
     )
 
     try:
-        res = route.endpoint(body=req, x_tenant_id=test_tenant)
+        res = route.endpoint(body=req, tenant_id=test_tenant)
         assert res["success"] is True
         assert "test_call_uploaded_001" in str(res)
         assert res["report"]["evaluations_count"] >= 4

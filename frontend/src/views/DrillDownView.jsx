@@ -32,6 +32,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   const [timeline, setTimeline] = useState(null);
   const [evaluations, setEvaluations] = useState([]);
   const [reviews, setReviews] = useState([]);
+  const [audioUrl, setAudioUrl] = useState('');
   const [currentTime, setCurrentTime] = useState(0);
   const [seekTarget, setSeekTarget] = useState(null);
 
@@ -74,6 +75,34 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   useEffect(() => {
     if (!selectedCallId) return;
     loadCallData(selectedCallId);
+  }, [selectedCallId]);
+
+  useEffect(() => {
+    let objectUrl;
+    let cancelled = false;
+    setAudioUrl('');
+    if (!selectedCallId) return undefined;
+
+    api.getAudioUrl(selectedCallId)
+      .then((url) => {
+        objectUrl = url;
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+        } else {
+          setAudioUrl(url);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Failed to load call audio:', err);
+          setError(err.message || 'Failed to load call audio.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [selectedCallId]);
 
   async function loadCallData(id) {
@@ -185,8 +214,6 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     }
     return true;
   });
-
-  const audioUrl = selectedCallId ? api.getAudioUrl(selectedCallId) : '';
 
   // Extract primary outcome and quality summary from evaluations
   const outcomeEval = evaluations.find((ev) => ev.evaluator_id === 'outcome.intent' || ev.family === 'outcome');

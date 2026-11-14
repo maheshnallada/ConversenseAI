@@ -35,6 +35,7 @@ class InteractionMetrics:
     output_tokens: int | None
     total_tokens: int | None
     cost_breakdown: CostBreakdown
+    response_latency_samples: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -50,6 +51,6 @@ class PlatformObservabilitySummary:
     total_overlap_duration_s: float
     total_input_tokens: int
     total_output_tokens: int
-    total_cost: float
+    total_cost: float | None
     currency: str = "USD"
 

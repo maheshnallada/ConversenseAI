@@ -68,8 +68,22 @@ export const api = {
       headers: { 'X-Tenant-Id': tenant },
     }),
 
-  getAudioUrl: (id) =>
-    `${BASE_URL}/interactions/${encodeURIComponent(id)}/audio`,
+  getAudioUrl: async (id, tenant = 'health_campaign') => {
+    const res = await fetch(`${BASE_URL}/interactions/${encodeURIComponent(id)}/audio`, {
+      headers: { 'X-Tenant-Id': tenant },
+    });
+    if (!res.ok) {
+      let errDetail = `${res.status} ${res.statusText}`;
+      try {
+        const errJson = await res.json();
+        errDetail = errJson.detail || errJson.message || errDetail;
+      } catch {
+        // ignore
+      }
+      throw new Error(errDetail);
+    }
+    return URL.createObjectURL(await res.blob());
+  },
 
   submitReview: (id, data, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/reviews`, {
@@ -83,9 +97,9 @@ export const api = {
 
   // Ingestion
   uploadZip: async (file, tenant = 'health_campaign') => {
-    const res = await fetch(`${BASE_URL}/interactions/upload-zip?tenant_id=${encodeURIComponent(tenant)}`, {
+    const res = await fetch(`${BASE_URL}/interactions/upload-zip`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/zip' },
+      headers: { 'Content-Type': 'application/zip', 'X-Tenant-Id': tenant },
       body: file,
     });
     if (!res.ok) {
@@ -98,6 +112,7 @@ export const api = {
   processPath: (path, tenant = 'health_campaign') =>
     request('/interactions/process-and-evaluate', {
       method: 'POST',
+      headers: { 'X-Tenant-Id': tenant },
       body: JSON.stringify({ call_folder_path: path, tenant_id: tenant }),
     }),
 
@@ -109,11 +124,12 @@ export const api = {
 
   // Benchmark & Evaluators
   getBenchmark: (tenant = 'health_campaign') =>
-    request(`/golden-dataset/benchmark?tenant_id=${encodeURIComponent(tenant)}`),
+    request('/golden-dataset/benchmark', { headers: { 'X-Tenant-Id': tenant } }),
 
-  importGolden: (csvPath = null) =>
+  importGolden: (csvPath = null, tenant = 'health_campaign') =>
     request('/golden-dataset/import', {
       method: 'POST',
+      headers: { 'X-Tenant-Id': tenant },
       body: csvPath ? JSON.stringify({ csv_path: csvPath }) : undefined,
     }),
 

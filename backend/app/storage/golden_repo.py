@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import select, delete
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
 
 from app.domain.golden import GoldenCallLabel
@@ -12,45 +14,59 @@ class GoldenDatasetRepository:
         self.session_factory = session_factory
 
     def save_label(self, label: GoldenCallLabel) -> None:
-        now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
-            existing = session.scalar(
-                select(GoldenCallLabelRow).where(GoldenCallLabelRow.call_id == label.call_id)
-            )
-            if existing:
-                existing.interaction_id = label.interaction_id
-                existing.what_happened = label.what_happened
-                existing.correct_outcome = label.correct_outcome
-                existing.facts_customer_gave = label.facts_customer_gave or ""
-                existing.sentiment = label.sentiment
-                existing.emotion = label.emotion
-                existing.overall = label.overall
-                existing.first_thing_wrong_line = label.first_thing_wrong_line
-                existing.first_thing_wrong_what = label.first_thing_wrong_what
-                existing.never_rule_broken = label.never_rule_broken or "None"
-                existing.reviewer_notes = label.reviewer_notes
-            else:
-                row = GoldenCallLabelRow(
-                    call_id=label.call_id,
-                    interaction_id=label.interaction_id,
-                    what_happened=label.what_happened,
-                    correct_outcome=label.correct_outcome,
-                    facts_customer_gave=label.facts_customer_gave or "",
-                    sentiment=label.sentiment,
-                    emotion=label.emotion,
-                    overall=label.overall,
-                    first_thing_wrong_line=label.first_thing_wrong_line,
-                    first_thing_wrong_what=label.first_thing_wrong_what,
-                    never_rule_broken=label.never_rule_broken or "None",
-                    reviewer_notes=label.reviewer_notes,
-                    created_at=now,
-                )
-                session.add(row)
-            session.commit()
+        self.save_many([label])
 
     def save_many(self, labels: List[GoldenCallLabel]) -> None:
-        for lbl in labels:
-            self.save_label(lbl)
+        if not labels:
+            return
+
+        now = datetime.now(timezone.utc)
+        values = [
+            {
+                "call_id": label.call_id,
+                "interaction_id": label.interaction_id,
+                "what_happened": label.what_happened,
+                "correct_outcome": label.correct_outcome,
+                "facts_customer_gave": label.facts_customer_gave or "",
+                "sentiment": label.sentiment,
+                "emotion": label.emotion,
+                "overall": label.overall,
+                "first_thing_wrong_line": label.first_thing_wrong_line,
+                "first_thing_wrong_what": label.first_thing_wrong_what,
+                "never_rule_broken": label.never_rule_broken or "None",
+                "reviewer_notes": label.reviewer_notes,
+                "created_at": now,
+            }
+            for label in labels
+        ]
+        update_fields = {
+            "interaction_id",
+            "what_happened",
+            "correct_outcome",
+            "facts_customer_gave",
+            "sentiment",
+            "emotion",
+            "overall",
+            "first_thing_wrong_line",
+            "first_thing_wrong_what",
+            "never_rule_broken",
+            "reviewer_notes",
+        }
+
+        with self.session_factory.begin() as session:
+            dialect = session.get_bind().dialect.name
+            if dialect == "sqlite":
+                insert = sqlite_insert(GoldenCallLabelRow)
+            elif dialect == "postgresql":
+                insert = postgresql_insert(GoldenCallLabelRow)
+            else:
+                raise ValueError(f"Unsupported golden dataset database dialect: {dialect}")
+
+            statement = insert.on_conflict_do_update(
+                index_elements=[GoldenCallLabelRow.call_id],
+                set_={field: getattr(insert.excluded, field) for field in update_fields},
+            )
+            session.execute(statement, values)
 
     def get_by_call_id(self, call_id: str) -> Optional[GoldenCallLabel]:
         with self.session_factory() as session:

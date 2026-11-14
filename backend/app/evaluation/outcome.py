@@ -1,5 +1,6 @@
-import json
 import logging
+import json
+import re
 from typing import List, Optional, Dict, Any
 from app.domain.envelope import InteractionEnvelope
 from app.domain.transcript import TranscriptTurn
@@ -97,10 +98,18 @@ class OutcomeEvaluator(BaseEvaluator):
         if not customer_turns:
             return "No outcome: customer left first", [], 0.95, "deterministic"
 
-        # Check for voicemail / machine
+        # Explicit voicemail language takes precedence over general machine indicators.
         for ct in customer_turns:
             text = (ct.normalized_text or ct.raw_text).lower()
-            if any(k in text for k in ["beep", "leave a message", "voicemail", "call screen", "press 1"]):
+            if any(
+                re.search(pattern, text)
+                for pattern in (
+                    r"\bvoicemail\b",
+                    r"\bvoice mail\b",
+                    r"\bleave (?:a|your) message\b",
+                    r"\bafter (?:the )?(?:tone|beep)\b",
+                )
+            ):
                 return (
                     "Voicemail",
                     [EvidenceItem(
@@ -108,7 +117,34 @@ class OutcomeEvaluator(BaseEvaluator):
                         reference_id=ct.turn_id,
                         line_index=ct.turn_index,
                         text_snippet=ct.raw_text,
-                        reason="Voicemail / automated message detected"
+                        reason="Voicemail indicator detected"
+                    )],
+                    0.95,
+                    "deterministic",
+                )
+
+        for ct in customer_turns:
+            text = (ct.normalized_text or ct.raw_text).lower()
+            if any(
+                re.search(pattern, text)
+                for pattern in (
+                    r"\bcall (?:is )?(?:being )?screened\b",
+                    r"\bcall[\s-]+screen(?:ing|ed)?\b",
+                    r"\bscreening (?:call|system)\b",
+                    r"\bpress 1\b",
+                    r"\banswering machine\b",
+                    r"\bautomated (?:recording|message|system|attendant)\b",
+                    r"\brecorded (?:message|machine|system)\b",
+                )
+            ):
+                return (
+                    "Call screener or machine",
+                    [EvidenceItem(
+                        source_type="transcript_turn",
+                        reference_id=ct.turn_id,
+                        line_index=ct.turn_index,
+                        text_snippet=ct.raw_text,
+                        reason="Call-screening or recorded-machine indicator detected"
                     )],
                     0.95,
                     "deterministic",
@@ -168,9 +204,37 @@ class OutcomeEvaluator(BaseEvaluator):
         # Check for Expert Call Booked (Customer confirmed appointment)
         for ct in reversed(customer_turns):
             text = (ct.normalized_text or ct.raw_text).lower()
-            if any(k in text for k in ["yes", "yeah", "sure", "book it", "that works", "okay tomorrow", "schedule it", "fine tomorrow", "call tomorrow"]):
-                prior_agent = [at for at in agent_turns if at.turn_index < ct.turn_index]
-                if prior_agent and any(w in (prior_agent[-1].normalized_text or prior_agent[-1].raw_text).lower() for w in ["expert", "consult", "call", "schedule", "tomorrow", "pm", "am"]):
+            is_confirmation = bool(
+                re.fullmatch(
+                    r"\s*(?:yes|yeah|yep|sure|okay|ok|fine)(?:\s*,?\s*please)?[.! ]*",
+                    text,
+                )
+                or re.search(
+                    r"\b(?:that|it|today|tomorrow|this (?:morning|afternoon|evening)) works\b"
+                    r"|\b(?:book|schedule) it\b"
+                    r"|\b(?:i can|i will|i'll) do that\b",
+                    text,
+                )
+            )
+            if is_confirmation:
+                prior_turns = [at for at in all_turns if at.turn_index < ct.turn_index]
+                prior_turn = max(prior_turns, key=lambda at: at.turn_index) if prior_turns else None
+                if prior_turn is None or prior_turn.speaker != "agent":
+                    continue
+                proposal_text = (prior_turn.normalized_text or prior_turn.raw_text).lower()
+                explicit_appointment = re.search(
+                    r"\b(?:schedule|book|arrange|set up|reserve)\b", proposal_text
+                ) and re.search(
+                    r"\b(?:expert|consult(?:ation)?|call|appointment|slot)\b", proposal_text
+                )
+                explicit_time = re.search(
+                    r"\b(?:today|tomorrow|this (?:morning|afternoon|evening)|"
+                    r"next (?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
+                    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+                    r"|\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
+                    proposal_text,
+                )
+                if explicit_appointment and explicit_time:
                     return (
                         "Expert call booked",
                         [EvidenceItem(
@@ -214,7 +278,23 @@ class OutcomeEvaluator(BaseEvaluator):
 
         # If machine
         for ct in customer_turns:
-            if any(k in ct.raw_text.lower() for k in ["beep", "leave a message", "voicemail", "press 1"]):
+            text = (ct.normalized_text or ct.raw_text).lower()
+            if any(
+                re.search(pattern, text)
+                for pattern in (
+                    r"\bvoicemail\b",
+                    r"\bvoice mail\b",
+                    r"\bleave (?:a|your) message\b",
+                    r"\bafter (?:the )?(?:tone|beep)\b",
+                    r"\bcall (?:is )?(?:being )?screened\b",
+                    r"\bcall[\s-]+screen(?:ing|ed)?\b",
+                    r"\bscreening (?:call|system)\b",
+                    r"\bpress 1\b",
+                    r"\banswering machine\b",
+                    r"\bautomated (?:recording|message|system|attendant)\b",
+                    r"\brecorded (?:message|machine|system)\b",
+                )
+            ):
                 return "Machine or call screener answered", [EvidenceItem(
                     source_type="transcript_turn",
                     reference_id=ct.turn_id,

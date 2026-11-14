@@ -18,7 +18,7 @@ services:
 
   backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     container_name: conversense_backend
     depends_on:
@@ -30,7 +30,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app/backend
       - artifacts_data:/app/backend/storage/artifacts
       - ./data:/app/data:ro
 
