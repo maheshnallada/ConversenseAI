@@ -440,4 +440,3 @@ def test_service_retry_only_reruns_failed_batches_and_carries_successes():
     assert latest.run_id == second.run_id
     assert service.eval_repo.get_latest_run("other_tenant", "call_retry") is None
 
-
