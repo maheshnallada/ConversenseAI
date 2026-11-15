@@ -81,8 +81,17 @@ for an existing `call_id` is reported as a conflict and never overwrites the
 existing call.
 
 Imported files remain in the configured local artifact store; this workflow
-does not upload them to object storage. Importing only saves the call and does
-not run evaluation. Evaluation remains a separate, manual action.
+does not upload them to object storage. After each call's atomic import commits,
+the request waits synchronously for post-import processing. Successful created
+and replayed imports report transcript-turn, timeline, observability, and
+evaluation stage statuses and errors. A failure in a derived stage is reported
+without undoing the persisted import.
+
+An identical replay does not duplicate an existing evaluation run. Missing
+timeline or observability outputs can be rebuilt, but reevaluation is manual
+and explicit; retrying failed evaluation batches is also a separate manual
+action. This workflow does not add a queue, background workers, object storage,
+or platform telemetry.
 
 The upload API accepts multipart files with relative folder names at
 `POST /api/v1/imports/upload-calls`. Staged calls can be listed with
