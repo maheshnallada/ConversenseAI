@@ -115,10 +115,12 @@ After a call's interaction, transcript turns, and artifacts commit atomically,
 the request waits for post-import processing before returning. Successful
 created and replayed imports report transcript-turn, timeline, observability,
 and evaluation stage statuses and errors. A derived-stage failure does not
-undo the persisted import. Identical replays do not duplicate an existing
-evaluation run; missing deterministic outputs may be rebuilt. Reevaluation
-requires an explicit manual action, and failed evaluation batches are retried
-manually.
+undo the persisted import. If timeline or observability calculation fails,
+evaluation is still attempted from the persisted transcript, and the
+calculation failure is reported separately from the evaluation outcome.
+Identical replays do not duplicate an existing evaluation run; missing
+deterministic outputs may be rebuilt. Reevaluation requires an explicit manual
+action, and failed evaluation batches are retried manually.
 
 This behavior is detailed in
 [the call import processing design](2026-11-15-call-import-processing-design.md).

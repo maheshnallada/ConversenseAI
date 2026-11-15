@@ -85,7 +85,9 @@ does not upload them to object storage. After each call's atomic import commits,
 the request waits synchronously for post-import processing. Successful created
 and replayed imports report transcript-turn, timeline, observability, and
 evaluation stage statuses and errors. A failure in a derived stage is reported
-without undoing the persisted import.
+without undoing the persisted import. If timeline or observability calculation
+fails, evaluation is still attempted from the persisted transcript, and the
+calculation failure is reported separately from the evaluation outcome.
 
 An identical replay does not duplicate an existing evaluation run. Missing
 timeline or observability outputs can be rebuilt, but reevaluation is manual
