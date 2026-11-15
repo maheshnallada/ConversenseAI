@@ -50,6 +50,35 @@ export const api = {
     return request(`/interactions?${q}`, { headers: { 'X-Tenant-Id': tenant } });
   },
 
+  // Call imports
+  getStagedCallFolders: (tenant = 'health_campaign') =>
+    request('/imports/staged-calls', {
+      headers: { 'X-Tenant-Id': tenant },
+    }),
+
+  importStagedCallFolders: (folderIds, tenant = 'health_campaign') =>
+    request('/imports/staged-calls', {
+      method: 'POST',
+      headers: { 'X-Tenant-Id': tenant },
+      body: JSON.stringify({ folder_ids: folderIds }),
+    }),
+
+  importCallFolderFiles: (files, tenant = 'health_campaign') => {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append(
+        'files',
+        file,
+        file.webkitRelativePath || file.name,
+      );
+    }
+    return request('/imports/upload-calls', {
+      method: 'POST',
+      headers: { 'X-Tenant-Id': tenant },
+      body: formData,
+    });
+  },
+
   getInteraction: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}`, { headers: { 'X-Tenant-Id': tenant } }),
 

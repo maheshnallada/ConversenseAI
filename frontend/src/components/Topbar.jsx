@@ -19,6 +19,10 @@ const TITLES = {
     title: 'Golden Dataset Benchmark Validation',
     subtitle: 'Evaluate automated compliance and outcome decisions against human ground-truth labels across all calls.',
   },
+  'import-calls': {
+    title: 'Import Calls',
+    subtitle: 'Validate and add one call or a folder batch without starting evaluation.',
+  },
 };
 
 export default function Topbar({

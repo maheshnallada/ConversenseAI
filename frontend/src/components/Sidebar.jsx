@@ -8,7 +8,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
-  Radio
+  Radio,
+  UploadCloud,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -16,6 +17,7 @@ const NAV_ITEMS = [
   { id: 'interactions', label: 'Interactions Explorer', icon: PhoneCall },
   { id: 'drilldown', label: 'Call Drill-Down', icon: Search },
   { id: 'benchmark', label: 'Golden Benchmark', icon: Award },
+  { id: 'import-calls', label: 'Import Calls', icon: UploadCloud },
 ];
 
 export default function Sidebar({

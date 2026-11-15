@@ -323,7 +323,7 @@ def test_interaction_list_filters_by_date_use_case_status_and_error_state(
     ]
 
 
-def test_dashboard_uses_paginated_interactions_and_has_no_local_ingest_surface():
+def test_dashboard_has_call_import_surface_and_no_legacy_local_ingest():
     from pathlib import Path
 
     repository_root = Path(__file__).resolve().parents[2]
@@ -339,6 +339,10 @@ def test_dashboard_uses_paginated_interactions_and_has_no_local_ingest_surface()
     sidebar_source = (
         repository_root / "frontend" / "src" / "components" / "Sidebar.jsx"
     ).read_text(encoding="utf-8")
+    import_view_path = (
+        repository_root / "frontend" / "src" / "views" / "CallImportView.jsx"
+    )
+    import_view_source = import_view_path.read_text(encoding="utf-8")
     topbar_source = (
         repository_root / "frontend" / "src" / "components" / "Topbar.jsx"
     ).read_text(encoding="utf-8")
@@ -346,9 +350,16 @@ def test_dashboard_uses_paginated_interactions_and_has_no_local_ingest_surface()
     assert "getInteractionsList" not in client_source
     assert "api.getInteractionsPage(" in drilldown_source
     assert "IngestView" not in app_source
-    assert "'ingest'" not in sidebar_source
+    assert "CallImportView" in app_source
+    assert "import-calls" in sidebar_source
+    assert "Import Calls" in sidebar_source
     assert "onIngestClick" not in topbar_source
     assert not (repository_root / "frontend" / "src" / "views" / "IngestView.jsx").exists()
+    assert "Single call" in import_view_source
+    assert "Folder batch" in import_view_source
+    assert "Upload from computer" in import_view_source
+    assert "Staged backend calls" in import_view_source
+    assert "Retry failed calls" in import_view_source
     for legacy_api in (
         "getQuality",
         "getCost",
