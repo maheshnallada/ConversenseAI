@@ -200,23 +200,6 @@ def test_overview_analytics(analytics_service):
     assert overview["metrics_available_interactions"] == 1
     assert "quality_distribution" not in overview
 
-def test_quality_analytics(analytics_service):
-    quality = analytics_service.get_quality_analytics(tenant_id="health_campaign")
-
-    assert "outcomes" in quality
-    assert "sentiment" in quality
-    assert "emotion" in quality
-    assert "overall_quality" in quality
-    assert sum(quality["overall_quality"].values()) == 1
-
-def test_cost_analytics(analytics_service):
-    cost = analytics_service.get_cost_analytics(tenant_id="health_campaign")
-
-    assert cost["total_cost_usd"] > 0
-    assert cost["currency"] == "USD"
-    assert cost["total_tokens"] > 0
-    assert cost["telephony_cost_usd"] > 0
-
 def test_interactions_page_pagination(analytics_service):
     page1 = analytics_service.get_interactions_page(tenant_id="health_campaign", page=1, page_size=10)
 
@@ -310,39 +293,12 @@ def test_analytics_uses_latest_versioned_run_not_archival_results():
     )
 
     overview = service.get_overview_analytics("tenant_latest")
-    quality = service.get_quality_analytics("tenant_latest")
     page = service.get_interactions_page("tenant_latest")
 
     assert overview["interaction_status_counts"] == {"completed": 1}
     assert "quality_distribution" not in overview
-    assert quality["outcomes"] == {"Not interested": 1}
-    assert quality["overall_quality"] == {"Bad": 1}
     assert page["items"][0]["outcome"] == "Not interested"
     assert "quality" not in page["items"][0]
-
-
-def test_cost_analytics_does_not_sum_mixed_currencies():
-    service, factory = _isolated_service()
-    repository = ObservabilityRepository(factory)
-    repository.save_metrics(_cost_metrics("call_usd", "USD", 0.01))
-    repository.save_metrics(_cost_metrics("call_eur", "EUR", 0.02))
-
-    cost = service.get_cost_analytics("tenant_cost")
-
-    assert cost["total_cost"] is None
-    assert cost["currency"] is None
-    assert cost["cost_by_currency"] == {"USD": 0.01, "EUR": 0.02}
-    assert cost["total_cost_usd"] is None
-
-
-def test_cost_analytics_empty_result_has_no_currency_or_total():
-    service, _ = _isolated_service()
-
-    cost = service.get_cost_analytics("tenant_without_costs")
-
-    assert cost["total_cost"] is None
-    assert cost["currency"] is None
-    assert cost["cost_by_currency"] == {}
 
 
 def test_reliability_uses_persisted_interaction_statuses_and_failures_only():

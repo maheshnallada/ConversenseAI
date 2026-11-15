@@ -53,23 +53,6 @@ def _evaluation_run():
     )
 
 
-def test_evaluation_service_uses_artifact_root_and_tenant_call_layout(
-    session_factory, monkeypatch, tmp_path
-):
-    artifact_root = tmp_path / "configured-artifacts"
-    call_folder = artifact_root / "tenant_a" / "call_01"
-    call_folder.mkdir(parents=True)
-    (call_folder / "call.json").write_text(
-        json.dumps({"call_id": "canonical-call-id"}), encoding="utf-8"
-    )
-    monkeypatch.setenv("ARTIFACT_STORAGE_PATH", str(artifact_root))
-
-    service = EvaluationService(session_factory, registry=object())
-
-    assert service.artifact_store.base_dir == artifact_root.resolve()
-    assert service.resolve_interaction_id("tenant_a", "call_01") == "canonical-call-id"
-
-
 def test_import_calls_uses_environment_defaults(monkeypatch, tmp_path):
     captured = {}
     fake_result = SimpleNamespace(

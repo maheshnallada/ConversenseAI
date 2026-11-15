@@ -76,9 +76,17 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   useEffect(() => {
     async function fetchCalls() {
       try {
-        const calls = await api.getInteractionsList();
-        setCallList(calls || []);
-        if (!selectedCallId && calls && calls.length > 0) {
+        const firstPage = await api.getInteractionsPage({ page: 1, page_size: 100 });
+        const pages = Array.from(
+          { length: Math.max(0, (firstPage.pages || 1) - 1) },
+          (_, index) => index + 2
+        );
+        const remainingPages = await Promise.all(
+          pages.map((page) => api.getInteractionsPage({ page, page_size: 100 }))
+        );
+        const calls = [firstPage, ...remainingPages].flatMap((page) => page.items || []);
+        setCallList(calls);
+        if (!selectedCallId && calls.length > 0) {
           const first = calls[0].interaction_id || calls[0].id || calls[0];
           selectCallId(first);
         }

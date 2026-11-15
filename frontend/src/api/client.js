@@ -38,12 +38,6 @@ export const api = {
   getOverview: (tenant = 'health_campaign') =>
     request('/analytics/overview', { headers: { 'X-Tenant-Id': tenant } }),
 
-  getQuality: (tenant = 'health_campaign') =>
-    request('/analytics/quality', { headers: { 'X-Tenant-Id': tenant } }),
-
-  getCost: (tenant = 'health_campaign') =>
-    request('/analytics/cost', { headers: { 'X-Tenant-Id': tenant } }),
-
   getReliability: (tenant = 'health_campaign') =>
     request('/analytics/reliability', { headers: { 'X-Tenant-Id': tenant } }),
 
@@ -51,9 +45,6 @@ export const api = {
     request('/analytics/usage', { headers: { 'X-Tenant-Id': tenant } }),
 
   // Interactions
-  getInteractionsList: (tenant = 'health_campaign') =>
-    request('/interactions-list', { headers: { 'X-Tenant-Id': tenant } }),
-
   getInteractionsPage: (params = {}, tenant = 'health_campaign') => {
     const q = new URLSearchParams(params).toString();
     return request(`/interactions?${q}`, { headers: { 'X-Tenant-Id': tenant } });
@@ -105,33 +96,6 @@ export const api = {
 
   listReviews: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/reviews`, { headers: { 'X-Tenant-Id': tenant } }),
-
-  // Ingestion
-  uploadZip: async (file, tenant = 'health_campaign') => {
-    const res = await fetch(`${BASE_URL}/interactions/upload-zip`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/zip', 'X-Tenant-Id': tenant },
-      body: file,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.message || 'Upload failed');
-    }
-    return res.json();
-  },
-
-  processPath: (path, tenant = 'health_campaign') =>
-    request('/interactions/process-and-evaluate', {
-      method: 'POST',
-      headers: { 'X-Tenant-Id': tenant },
-      body: JSON.stringify({ call_folder_path: path, tenant_id: tenant }),
-    }),
-
-  seedAll: (limit = 50, tenant = 'health_campaign') =>
-    request(`/interactions/seed-all?limit=${limit}`, {
-      method: 'POST',
-      headers: { 'X-Tenant-Id': tenant },
-    }),
 
   // Benchmark
   getBenchmark: (tenant = 'health_campaign') =>

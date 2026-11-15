@@ -321,3 +321,39 @@ def test_interaction_list_filters_by_date_use_case_status_and_error_state(
     assert [item["interaction_id"] for item in no_error_page.json()["items"]] == [
         "call-no-error"
     ]
+
+
+def test_dashboard_uses_paginated_interactions_and_has_no_local_ingest_surface():
+    from pathlib import Path
+
+    repository_root = Path(__file__).resolve().parents[2]
+    client_source = (
+        repository_root / "frontend" / "src" / "api" / "client.js"
+    ).read_text(encoding="utf-8")
+    drilldown_source = (
+        repository_root / "frontend" / "src" / "views" / "DrillDownView.jsx"
+    ).read_text(encoding="utf-8")
+    app_source = (
+        repository_root / "frontend" / "src" / "App.jsx"
+    ).read_text(encoding="utf-8")
+    sidebar_source = (
+        repository_root / "frontend" / "src" / "components" / "Sidebar.jsx"
+    ).read_text(encoding="utf-8")
+    topbar_source = (
+        repository_root / "frontend" / "src" / "components" / "Topbar.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "getInteractionsList" not in client_source
+    assert "api.getInteractionsPage(" in drilldown_source
+    assert "IngestView" not in app_source
+    assert "'ingest'" not in sidebar_source
+    assert "onIngestClick" not in topbar_source
+    assert not (repository_root / "frontend" / "src" / "views" / "IngestView.jsx").exists()
+    for legacy_api in (
+        "getQuality",
+        "getCost",
+        "uploadZip",
+        "processPath",
+        "seedAll",
+    ):
+        assert legacy_api not in client_source

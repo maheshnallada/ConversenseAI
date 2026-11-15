@@ -1,20 +1,14 @@
-import io
 import json
 import logging
-import shutil
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
-from starlette.requests import Request
 
-from app.api.app import UploadFilesRequest, create_app
-import app.api.app as api_module
+from app.api.app import create_app
 from app.core.logging import StructuredJsonFormatter, TraceLoggingMiddleware, configure_logging, get_logger
 from app.domain.envelope import InteractionEnvelope
 from app.domain.timeline import ReconstructedTimeline, TimelineEvent
@@ -62,15 +56,6 @@ def test_structured_logging_formatter():
     assert parsed["status_code"] == 200
     assert parsed["duration_ms"] == 4.25
     assert "timestamp" in parsed
-
-
-def test_interactions_list_selector_route(app_and_factory):
-    app, factory = app_and_factory
-    _insert_interaction(factory, "call_18", folder_name="call_18")
-    route = next(r for r in app.routes if r.path == "/api/v1/interactions-list")
-    items = route.endpoint(tenant_id="health_campaign")
-    assert len(items) == 1
-    assert items[0]["folder_name"] == "call_18"
 
 
 def _insert_interaction(factory, interaction_id, folder_name=None):
@@ -153,30 +138,6 @@ def test_timeline_and_audio_resolve_for_persisted_interaction(
     assert Path(audio.path) == recording
 
 
-def test_find_call_folder_variants(app_and_factory):
-    _, factory = app_and_factory
-    from app.evaluation.service import EvaluationService
-    svc = EvaluationService(factory)
-
-    for p in ["data/calls/call_01", "call_01", "calls/call_01"]:
-        found = svc._find_call_folder(p)
-        assert found.exists()
-        assert (found / "call.json").exists()
-
-
-def test_find_call_folder_rejects_existing_directory_outside_trusted_roots(app_and_factory, tmp_path):
-    _, factory = app_and_factory
-    from app.evaluation.service import EvaluationService
-
-    outside_folder = tmp_path / "call_external"
-    outside_folder.mkdir()
-    (outside_folder / "call.json").write_text('{"call_id": "external"}', encoding="utf-8")
-    service = EvaluationService(factory)
-
-    with pytest.raises(FileNotFoundError):
-        service._find_call_folder(outside_folder, tenant_id="health_campaign")
-
-
 def test_unhandled_exception_response_includes_trace_headers():
     app = FastAPI()
     app.add_middleware(TraceLoggingMiddleware)
@@ -194,58 +155,3 @@ def test_unhandled_exception_response_includes_trace_headers():
     assert response.status_code == 500
     assert response.headers["X-Trace-ID"] == "trace-test"
     assert response.headers["X-Request-ID"] == "request-test"
-
-
-def test_upload_files_rejects_folder_name_that_escapes_staging(
-    app_and_factory, tmp_path, monkeypatch
-):
-    app, _ = app_and_factory
-    monkeypatch.chdir(tmp_path)
-    route = next(r for r in app.routes if r.path == "/api/v1/interactions/upload-files")
-    request = UploadFilesRequest(
-        folder_name="../outside",
-        call_json='{"call_id": "should_not_be_written"}',
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        route.endpoint(body=request, tenant_id="test_upload_tenant")
-
-    assert exc_info.value.status_code == 400
-    assert not (tmp_path / "backend" / "storage" / "outside" / "call.json").exists()
-
-
-def test_upload_files_json_endpoint(app_and_factory):
-    app, _ = app_and_factory
-    route = next(r for r in app.routes if r.path == "/api/v1/interactions/upload-files")
-
-    test_tenant = "test_upload_tenant"
-    req = UploadFilesRequest(
-        folder_name="test_upload_01",
-        call_json=json.dumps({
-            "call_id": "test_call_uploaded_001",
-            "meta": {"agent": "voice_bot", "usage": {"line": {"connected_s": 15.0}}},
-            "disposition": "answered",
-            "started_at": "2026-11-14T08:00:00Z",
-            "end_reason": "customer_ended",
-        }),
-        manifest_jsonl='{"event": "start", "time": 0.0}\n{"event": "end", "time": 15.0}\n',
-        call_log="2026-11-14 Call started\n2026-11-14 Call ended\n",
-        tenant_id=test_tenant,
-    )
-    staging_dir = api_module.UPLOAD_ROOT / test_tenant / "test_upload_01"
-    shutil.rmtree(staging_dir, ignore_errors=True)
-
-    try:
-        res = route.endpoint(body=req, tenant_id=test_tenant)
-        assert res["success"] is True
-        assert "test_call_uploaded_001" in str(res)
-        assert res["report"]["evaluations_count"] == 3
-        assert {
-            batch["batch_name"] for batch in res["report"]["evaluations"]
-        } == {
-            "conversation_understanding",
-            "conversation_quality",
-            "compliance_appointment",
-        }
-    finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)

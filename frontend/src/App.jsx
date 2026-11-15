@@ -5,7 +5,6 @@ import Topbar from './components/Topbar';
 import OverviewView from './views/OverviewView';
 import InteractionsView from './views/InteractionsView';
 import DrillDownView from './views/DrillDownView';
-import IngestView from './views/IngestView';
 import BenchmarkView from './views/BenchmarkView';
 
 function AppContent() {
@@ -58,7 +57,6 @@ function AppContent() {
         <Topbar
           activeTab={activeTab}
           onRefresh={handleRefresh}
-          onIngestClick={() => setActiveTab('ingest')}
           onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
           isRefreshing={isRefreshing}
         />
@@ -77,9 +75,6 @@ function AppContent() {
                 initialCallId={selectedCallId}
                 onSelectCallId={setSelectedCallId}
               />
-            )}
-            {activeTab === 'ingest' && (
-              <IngestView onNavigateToDrillDown={handleInspectCall} />
             )}
             {activeTab === 'benchmark' && <BenchmarkView />}
           </div>

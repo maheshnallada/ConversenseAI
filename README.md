@@ -20,6 +20,47 @@ npm ci
 npm run build
 ```
 
+## Interaction ingestion
+
+Submit canonical interaction data using the tenant-scoped API. Transcript turns and optional artifact metadata are appended separately; audio is only a review artifact and is not used to reconstruct transcript text.
+
+```powershell
+$headers = @{ "X-Tenant-Id" = "health_campaign" }
+$interaction = @{
+  tenant_id = "health_campaign"
+  interaction_id = "interaction-123"
+  schema_version = "1.0"
+  use_case = "health_insurance"
+  status = "completed"
+  started_at = "2026-11-14T08:00:00Z"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8000/api/v1/interactions" `
+  -Headers $headers -ContentType "application/json" -Body $interaction
+
+$turn = @{
+  event_id = "turn-1"
+  event_type = "transcript.turn"
+  occurred_at = "2026-11-14T08:00:01Z"
+  payload = @{
+    turn_id = "turn-1"
+    turn_index = 1
+    speaker = "agent"
+    raw_text = "Hello, how can I help?"
+    start_s = 0.0
+    end_s = 1.2
+    playback_spoken = "unknown"
+  }
+} | ConvertTo-Json -Depth 10
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8000/api/v1/interactions/interaction-123/events" `
+  -Headers $headers -ContentType "application/json" -Body $turn
+```
+
+Use `GET /api/v1/interactions` for paginated interaction search and filtering, and register optional review-artifact metadata at `/api/v1/interactions/{interaction_id}/artifacts`. The API does not accept call-folder paths or ZIP uploads.
+
 ## Evaluation workflow
 
 An evaluation run executes three structured batches concurrently:

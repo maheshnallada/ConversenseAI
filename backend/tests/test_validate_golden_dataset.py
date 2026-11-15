@@ -106,13 +106,6 @@ def test_main_creates_report_parent_directory(tmp_path: Path, monkeypatch) -> No
     )
     monkeypatch.setattr(
         validate_golden_dataset,
-        "EvaluationService",
-        lambda _factory: SimpleNamespace(
-            resolve_interaction_id=lambda _tenant_id, call_id: call_id
-        ),
-    )
-    monkeypatch.setattr(
-        validate_golden_dataset,
         "EvaluationRepository",
         lambda _factory: SimpleNamespace(
             get_latest_run=lambda _tenant_id, call_id: _outcome_run(

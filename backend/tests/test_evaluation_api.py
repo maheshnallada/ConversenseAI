@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 from app.api.app import (
     create_app,
@@ -88,10 +89,8 @@ def test_evaluate_endpoint_accepts_retry_source_and_returns_partial_run(
 
 
 def test_evaluations_endpoint_returns_latest_versioned_run_not_legacy_rows(
-    session_factory, monkeypatch
+    session_factory,
 ):
-    from app.api import app as api_module
-
     now = datetime.now(timezone.utc)
     repo = EvaluationRepository(session_factory)
     repo.save_run(_run("run-old", now - timedelta(minutes=1)))
@@ -119,14 +118,6 @@ def test_evaluations_endpoint_returns_latest_versioned_run_not_legacy_rows(
             {"created_at": now.isoformat()},
         )
 
-    class StubEvaluationService:
-        def __init__(self, _session_factory):
-            pass
-
-        def resolve_interaction_id(self, tenant_id, interaction_id):
-            return interaction_id
-
-    monkeypatch.setattr(api_module, "EvaluationService", StubEvaluationService)
     app = create_app(session_factory)
     route = next(
         route for route in app.routes
@@ -142,19 +133,7 @@ def test_evaluations_endpoint_returns_latest_versioned_run_not_legacy_rows(
     assert "evaluator_id" not in result["batches"][0]
 
 
-def test_evaluations_endpoint_returns_empty_when_no_run_exists(
-    session_factory, monkeypatch
-):
-    from app.api import app as api_module
-
-    class StubEvaluationService:
-        def __init__(self, _session_factory):
-            pass
-
-        def resolve_interaction_id(self, tenant_id, interaction_id):
-            return interaction_id
-
-    monkeypatch.setattr(api_module, "EvaluationService", StubEvaluationService)
+def test_evaluations_endpoint_returns_empty_when_no_run_exists(session_factory):
     app = create_app(session_factory)
     route = next(
         route for route in app.routes
@@ -164,20 +143,10 @@ def test_evaluations_endpoint_returns_empty_when_no_run_exists(
     assert route.endpoint("call_without_run", "tenant_001") is None
 
 
-def test_review_endpoint_targets_a_versioned_batch(session_factory, monkeypatch):
-    from app.api import app as api_module
-
+def test_review_endpoint_targets_a_versioned_batch(session_factory):
     run = _run("run-review", datetime.now(timezone.utc))
     EvaluationRepository(session_factory).save_run(run)
 
-    class StubEvaluationService:
-        def __init__(self, _session_factory):
-            pass
-
-        def resolve_interaction_id(self, tenant_id, interaction_id):
-            return interaction_id
-
-    monkeypatch.setattr(api_module, "EvaluationService", StubEvaluationService)
     app = create_app(session_factory)
     route = next(
         route for route in app.routes
@@ -200,13 +169,28 @@ def test_review_endpoint_targets_a_versioned_batch(session_factory, monkeypatch)
     assert review["review_decision"] == "ACCEPTED"
 
 
+def test_review_endpoint_returns_404_for_missing_evaluation(test_app):
+    response = TestClient(test_app, raise_server_exceptions=False).post(
+        "/api/v1/interactions/call_01/reviews",
+        headers={"X-Tenant-Id": "tenant_001"},
+        json={
+            "evaluation_id": "missing-evaluation",
+            "reviewed_label": "accepted",
+            "reviewer_name": "Reviewer",
+            "review_decision": "ACCEPTED",
+        },
+    )
+
+    assert response.status_code == 404
+
+
 def test_api_routes_registered(test_app):
     routes = [r.path for r in test_app.routes]
     assert "/api/v1/interactions" in routes
     assert "/api/v1/interactions/{interaction_id}" in routes
     assert "/api/v1/interactions/{interaction_id}/evaluate" in routes
     assert "/api/v1/interactions/{interaction_id}/evaluations" in routes
-    assert "/api/v1/interactions/process-and-evaluate" in routes
+    assert "/api/v1/interactions/process-and-evaluate" not in routes
     assert "/api/v1/evaluators" not in routes
 
 

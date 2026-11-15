@@ -9,7 +9,6 @@ if str(backend_path) not in sys.path:
 
 from app.domain.evaluation import EvaluationRun
 from app.domain.golden import GoldenCallLabel
-from app.evaluation.service import EvaluationService
 from app.storage.db import create_session_factory, init_db
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.golden_repo import GoldenDatasetRepository
@@ -115,13 +114,10 @@ def main():
     labels = load_golden_dataset(args.golden_csv)
     GoldenDatasetRepository(factory).save_many(labels)
 
-    evaluation_service = EvaluationService(factory)
     evaluation_repo = EvaluationRepository(factory)
     runs_by_call = {}
     for label in labels:
-        interaction_id = evaluation_service.resolve_interaction_id(
-            args.tenant_id, label.call_id
-        )
+        interaction_id = label.interaction_id or label.call_id
         runs_by_call[label.call_id] = evaluation_repo.get_latest_run(
             args.tenant_id, interaction_id
         )

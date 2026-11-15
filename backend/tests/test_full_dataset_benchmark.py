@@ -6,7 +6,6 @@ from app.storage.db import create_session_factory
 from app.storage.golden_repo import GoldenDatasetRepository
 from app.storage.evaluation_repo import EvaluationRepository
 from app.domain.golden import GoldenCallLabel
-from app.evaluation.service import EvaluationService
 from app.storage.orm import GoldenCallLabelRow
 from app.validation.benchmark import BenchmarkEngine
 
@@ -18,7 +17,6 @@ def test_full_dataset_benchmark_execution():
 
     factory = create_session_factory(f"sqlite:///{db_path}")
     golden_repo = GoldenDatasetRepository(factory)
-    eval_service = EvaluationService(factory)
     eval_repo = EvaluationRepository(factory)
 
     try:
@@ -36,11 +34,8 @@ def test_full_dataset_benchmark_execution():
     evaluations_by_call = {}
     try:
         for g in golden_labels:
-            resolved_id = eval_service.resolve_interaction_id(
-                "health_campaign",
-                g.interaction_id or g.call_id,
-            )
-            run = eval_repo.get_latest_run("health_campaign", resolved_id)
+            interaction_id = g.interaction_id or g.call_id
+            run = eval_repo.get_latest_run("health_campaign", interaction_id)
             if run is None:
                 pytest.skip(
                     f"versioned evaluation run is unavailable for {g.call_id}"

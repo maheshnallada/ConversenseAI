@@ -1,5 +1,5 @@
 import React from 'react';
-import { RefreshCw, UploadCloud, Menu, Sun, Moon } from 'lucide-react';
+import { RefreshCw, Menu, Sun, Moon } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
 const TITLES = {
@@ -15,10 +15,6 @@ const TITLES = {
     title: 'Call Drill-Down & Audio Playback',
     subtitle: 'Stereo playback, synchronized turns timeline with reconciliation tags, and human adjudication audit trail.',
   },
-  ingest: {
-    title: 'On-Demand Data Ingestion & Evaluation',
-    subtitle: 'Ingest call archives (ZIP) or server paths to trigger full turn extraction, timeline reconstruction, and evaluation.',
-  },
   benchmark: {
     title: 'Golden Dataset Benchmark Validation',
     subtitle: 'Evaluate automated compliance and outcome decisions against human ground-truth labels across all calls.',
@@ -28,7 +24,6 @@ const TITLES = {
 export default function Topbar({
   activeTab,
   onRefresh,
-  onIngestClick,
   onToggleMobileMenu,
   isRefreshing,
 }) {
@@ -61,16 +56,6 @@ export default function Topbar({
 
       {/* Right: Actions & Theme Toggle */}
       <div className="flex items-center gap-2 sm:gap-3">
-        {activeTab !== 'ingest' && (
-          <button
-            onClick={onIngestClick}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-50 dark:bg-cyan-500/10 hover:bg-cyan-100 dark:hover:bg-cyan-500/20 text-cyan-700 dark:text-cyan-400 border border-cyan-200 dark:border-cyan-500/30 text-xs font-semibold transition-all shadow-sm"
-          >
-            <UploadCloud className="w-3.5 h-3.5" />
-            <span>Ingest Call</span>
-          </button>
-        )}
-
         <button
           onClick={onRefresh}
           disabled={isRefreshing}
