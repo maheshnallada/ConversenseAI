@@ -196,10 +196,8 @@ def load_golden_dataset(csv_path: Path | str, tenant_id: str = "tenant_default")
                     user_manifest = _load_jsonl(row.get("manifest_jsonl"))
                     agent_manifest = _load_jsonl(row.get("agent_manifest_jsonl"))
                     embedded_call_id = str(model_input.get("call_id") or "").strip()
-                    if raw_call_id and embedded_call_id and embedded_call_id != raw_call_id:
+                    if embedded_call_id != raw_call_id:
                         raise ValueError(f"Embedded call_id {embedded_call_id!r} does not match outer call_id {raw_call_id!r}.")
-                    if not embedded_call_id and raw_call_id:
-                        model_input["call_id"] = raw_call_id
                     input_hash = _make_input_hash(model_input, user_manifest, agent_manifest)
                     record.input_hash = input_hash
 
