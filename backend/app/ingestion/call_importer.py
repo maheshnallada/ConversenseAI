@@ -1,6 +1,8 @@
+import hashlib
 import json
 import logging
-from dataclasses import dataclass, field
+import threading
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
@@ -12,6 +14,11 @@ from app.domain.envelope import InteractionEnvelope
 from app.domain.transcript import TranscriptTurn
 from app.ingestion.errors import IdempotencyConflict
 from app.ingestion.mapper import map_call_folder_with_artifact_tracking
+from app.ingestion.post_import_processor import (
+    CallProcessingError,
+    CallProcessingSummary,
+    PostImportProcessor,
+)
 from app.ingestion.service import IngestionService, canonical_json, payload_hash
 from app.reconstruction.processor import TranscriptProcessor
 from app.storage.artifacts import ArtifactStore, StoredArtifact
@@ -24,6 +31,7 @@ from app.validation.audio import (
 )
 
 logger = logging.getLogger(__name__)
+_IMPORT_LOCKS = tuple(threading.Lock() for _ in range(64))
 
 
 @dataclass(frozen=True)
@@ -47,15 +55,26 @@ class CallImportResult:
     error: str | None = None
     has_agent_manifest: bool = False
     phone_answered: bool = False
+    processing: CallProcessingSummary | None = None
 
 
 class CallFolderImporter:
-    def __init__(self, session_factory, artifact_store: ArtifactStore) -> None:
+    def __init__(
+        self,
+        session_factory,
+        artifact_store: ArtifactStore,
+        post_import_processor: PostImportProcessor | None = None,
+    ) -> None:
         self._session_factory = session_factory
         self._artifact_store = artifact_store
         self._ingestion = IngestionService(session_factory)
         self._transcript_processor = TranscriptProcessor()
         self._transcript_repository = TranscriptRepository(session_factory)
+        self._post_import_processor = (
+            post_import_processor
+            if post_import_processor is not None
+            else PostImportProcessor(session_factory)
+        )
 
     def import_call(self, folder_path: Path, tenant_id: str) -> CallImportResult:
         folder = Path(folder_path)
@@ -74,46 +93,62 @@ class CallFolderImporter:
                 validation,
             )
 
-        stored_artifacts: list[StoredArtifact] = []
-        envelope: InteractionEnvelope | None = None
-        artifact_rows: list[ArtifactRow] = []
+        interaction_lock = self._import_lock(tenant_id, interaction_id or "")
+        interaction_lock.acquire()
         try:
-            mapped_envelope, artifact_rows, validation, stored_artifacts = (
-                map_call_folder_with_artifact_tracking(
-                    folder,
-                    tenant_id,
-                    self._artifact_store,
-                    stored_artifacts=stored_artifacts,
+            stored_artifacts: list[StoredArtifact] = []
+            envelope: InteractionEnvelope | None = None
+            artifact_rows: list[ArtifactRow] = []
+            turns: list[TranscriptTurn] = []
+            try:
+                mapped_envelope, artifact_rows, validation, stored_artifacts = (
+                    map_call_folder_with_artifact_tracking(
+                        folder,
+                        tenant_id,
+                        self._artifact_store,
+                        stored_artifacts=stored_artifacts,
+                    )
                 )
-            )
-            envelope = mapped_envelope
-            if not validation.is_valid:
-                cleanup_complete = self._cleanup_created(stored_artifacts)
+                envelope = mapped_envelope
+                if not validation.is_valid:
+                    cleanup_complete = self._cleanup_created(stored_artifacts)
+                    interaction_id = mapped_envelope.interaction_id
+                    result = self._result(
+                        folder_name,
+                        envelope.interaction_id,
+                        "invalid",
+                        files_count,
+                        audio_validation,
+                        validation,
+                        error=(
+                            None
+                            if cleanup_complete
+                            else "Artifact cleanup was incomplete."
+                        ),
+                    )
+                    return result
                 interaction_id = mapped_envelope.interaction_id
-                return self._result(
-                    folder_name,
-                    envelope.interaction_id,
-                    "invalid",
-                    files_count,
-                    audio_validation,
-                    validation,
-                    error=(
-                        None
-                        if cleanup_complete
-                        else "Artifact cleanup was incomplete."
-                    ),
+                turns = self._transcript_processor.process_folder(folder, tenant_id)
+                status = self._persist_call(mapped_envelope, turns, artifact_rows)
+            except (IdempotencyConflict, TranscriptTurnConflict, IntegrityError):
+                status = self._existing_status(
+                    envelope,
+                    artifact_rows,
                 )
-            interaction_id = mapped_envelope.interaction_id
-            turns = self._transcript_processor.process_folder(folder, tenant_id)
-            status = self._persist_call(mapped_envelope, turns, artifact_rows)
-        except (IdempotencyConflict, TranscriptTurnConflict, IntegrityError):
-            status = self._existing_status(
-                envelope,
-                artifact_rows,
-            )
-            if status is None:
+                if status is None:
+                    cleanup_complete = self._cleanup_created(stored_artifacts)
+                    logger.exception("Call folder import failed during persistence")
+                    return self._failed_result(
+                        folder_name,
+                        interaction_id,
+                        files_count,
+                        audio_validation,
+                        validation,
+                        cleanup_complete,
+                    )
+            except Exception:
                 cleanup_complete = self._cleanup_created(stored_artifacts)
-                logger.exception("Call folder import failed during persistence")
+                logger.exception("Call folder import failed")
                 return self._failed_result(
                     folder_name,
                     interaction_id,
@@ -122,43 +157,68 @@ class CallFolderImporter:
                     validation,
                     cleanup_complete,
                 )
-        except Exception:
-            cleanup_complete = self._cleanup_created(stored_artifacts)
-            logger.exception("Call folder import failed")
-            return self._failed_result(
+            if envelope is not None:
+                interaction_id = envelope.interaction_id
+            cleanup_complete = True
+            if status != "created":
+                cleanup_complete = self._cleanup_created(stored_artifacts)
+            error = (
+                "Call content differs from the previously imported version."
+                if status == "conflict"
+                else None
+            )
+            if not cleanup_complete:
+                error = (
+                    f"{error} Artifact cleanup was incomplete."
+                    if error
+                    else "Artifact cleanup was incomplete."
+                )
+            result = self._result(
                 folder_name,
                 interaction_id,
+                status,
                 files_count,
                 audio_validation,
                 validation,
-                cleanup_complete,
+                error=error,
             )
+        finally:
+            interaction_lock.release()
 
-        if envelope is not None:
-            interaction_id = envelope.interaction_id
-        cleanup_complete = True
-        if status != "created":
-            cleanup_complete = self._cleanup_created(stored_artifacts)
-        error = (
-            "Call content differs from the previously imported version."
-            if status == "conflict"
-            else None
-        )
-        if not cleanup_complete:
-            error = (
-                f"{error} Artifact cleanup was incomplete."
-                if error
-                else "Artifact cleanup was incomplete."
+        if status not in {"created", "replayed"} or envelope is None:
+            return result
+        try:
+            processing = self._post_import_processor.process_imported_call(
+                folder,
+                envelope,
+                turns,
+                validation,
             )
-        return self._result(
-            folder_name,
-            interaction_id,
-            status,
-            files_count,
-            audio_validation,
-            validation,
-            error=error,
-        )
+        except Exception:
+            logger.exception(
+                "Unexpected post-import processing failure for %s",
+                envelope.interaction_id,
+            )
+            processing = CallProcessingSummary(
+                transcript_turns=len(turns),
+                timeline_status="failed",
+                observability_status="failed",
+                evaluation_status="failed",
+                evaluation_run_id=None,
+                errors=[
+                    CallProcessingError(stage, f"{stage.title()} processing failed.")
+                    for stage in ("timeline", "observability", "evaluation")
+                ],
+            )
+        return replace(result, processing=processing)
+
+    @staticmethod
+    def _import_lock(tenant_id: str, interaction_id: str) -> threading.Lock:
+        key = hashlib.sha256(
+            f"{tenant_id}\0{interaction_id}".encode("utf-8")
+        ).digest()
+        stripe = int.from_bytes(key[:8], byteorder="big") % len(_IMPORT_LOCKS)
+        return _IMPORT_LOCKS[stripe]
 
     def _persist_call(
         self,

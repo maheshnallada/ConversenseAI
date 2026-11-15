@@ -27,6 +27,20 @@ class AudioValidationResponse(BaseModel):
     is_silent: bool = False
 
 
+class CallProcessingErrorResponse(BaseModel):
+    stage: Literal["timeline", "observability", "evaluation"]
+    message: str
+
+
+class CallProcessingSummaryResponse(BaseModel):
+    transcript_turns: int
+    timeline_status: Literal["ready", "failed"]
+    observability_status: Literal["ready", "failed"]
+    evaluation_status: Literal["ready", "failed"]
+    evaluation_run_id: str | None
+    errors: list[CallProcessingErrorResponse] = Field(default_factory=list)
+
+
 class CallImportResultResponse(BaseModel):
     folder_name: str
     interaction_id: str | None
@@ -37,6 +51,7 @@ class CallImportResultResponse(BaseModel):
     error: str | None = None
     has_agent_manifest: bool = False
     phone_answered: bool = False
+    processing: CallProcessingSummaryResponse | None = None
 
 
 class CallImportBatchResponse(BaseModel):

@@ -2,6 +2,7 @@ import io
 import json
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -9,8 +10,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.api.app import create_app
+from app.evaluation.service import EvaluationService
 from app.storage.artifacts import LocalArtifactStore
 from app.storage.orm import EvaluationRunRow, InteractionRow
+
+
+@pytest.fixture(autouse=True)
+def stub_call_import_evaluation(monkeypatch):
+    def evaluate(self, tenant_id, interaction_id, retry_from_run_id=None):
+        return SimpleNamespace(run_id=f"run-{interaction_id}", batches=[])
+
+    monkeypatch.setattr(EvaluationService, "evaluate_interaction", evaluate)
 
 
 def wav_bytes() -> bytes:
@@ -77,13 +87,11 @@ def test_staged_call_listing_shows_ready_and_incomplete_calls_without_paths(
     assert all("folder_id" in call for call in calls.values())
 
 
-def test_staged_import_is_tenant_scoped_and_reports_partial_results_without_evaluation(
+def test_staged_import_is_tenant_scoped_and_reports_processing_results(
     tmp_path: Path,
     session_factory,
     monkeypatch,
 ):
-    from app.evaluation.service import EvaluationService
-
     client, store = create_client(session_factory, tmp_path / "artifacts")
     create_staged_folder(store, "tenant-a", "ready-call", "ready-id")
     create_staged_folder(
@@ -98,10 +106,13 @@ def test_staged_import_is_tenant_scoped_and_reports_partial_results_without_eval
         headers={"X-Tenant-Id": "tenant-a"},
     ).json()["calls"]
 
-    def fail_if_evaluated(*args, **kwargs):
-        raise AssertionError("call import must not trigger evaluation")
+    evaluated = []
 
-    monkeypatch.setattr(EvaluationService, "evaluate_interaction", fail_if_evaluated)
+    def evaluate(self, tenant_id, interaction_id, retry_from_run_id=None):
+        evaluated.append((tenant_id, interaction_id, retry_from_run_id))
+        return SimpleNamespace(run_id=f"run-{interaction_id}", batches=[])
+
+    monkeypatch.setattr(EvaluationService, "evaluate_interaction", evaluate)
     response = client.post(
         "/api/v1/imports/staged-calls",
         headers={"X-Tenant-Id": "tenant-a"},
@@ -119,6 +130,19 @@ def test_staged_import_is_tenant_scoped_and_reports_partial_results_without_eval
         call for call in result["calls"] if call["folder_name"] == "ready-call"
     )
     assert ready_result["audio_validation"]["is_valid"] is True
+    assert ready_result["processing"] == {
+        "transcript_turns": 0,
+        "timeline_status": "ready",
+        "observability_status": "ready",
+        "evaluation_status": "ready",
+        "evaluation_run_id": "run-ready-id",
+        "errors": [],
+    }
+    invalid_result = next(
+        call for call in result["calls"] if call["folder_name"] == "incomplete-call"
+    )
+    assert invalid_result["processing"] is None
+    assert evaluated == [("tenant-a", "ready-id", None)]
     assert str(store.base_dir) not in response.text
 
     other_tenant_listing = client.get(
@@ -155,7 +179,44 @@ def test_single_uploaded_call_folder_is_imported(tmp_path: Path, session_factory
     assert result["created"] == 1
     assert result["calls"][0]["folder_name"] == "Uploaded call"
     assert result["calls"][0]["interaction_id"] == "single-call"
+    assert result["calls"][0]["processing"]["evaluation_status"] == "ready"
+    assert result["calls"][0]["processing"]["evaluation_run_id"] == "run-single-call"
     assert str(store.base_dir) not in response.text
+
+
+def test_processing_failure_for_one_staged_call_does_not_stop_later_calls(
+    tmp_path: Path,
+    session_factory,
+    monkeypatch,
+):
+    client, store = create_client(session_factory, tmp_path / "artifacts")
+    create_staged_folder(store, "tenant-a", "first", "first-call")
+    create_staged_folder(store, "tenant-a", "second", "second-call")
+    listing = client.get(
+        "/api/v1/imports/staged-calls",
+        headers={"X-Tenant-Id": "tenant-a"},
+    ).json()["calls"]
+
+    def evaluate(self, tenant_id, interaction_id, retry_from_run_id=None):
+        if interaction_id == "first-call":
+            raise RuntimeError("evaluation unavailable")
+        return SimpleNamespace(run_id="second-run", batches=[])
+
+    monkeypatch.setattr(EvaluationService, "evaluate_interaction", evaluate)
+    response = client.post(
+        "/api/v1/imports/staged-calls",
+        headers={"X-Tenant-Id": "tenant-a"},
+        json={"folder_ids": [call["folder_id"] for call in listing]},
+    )
+
+    assert response.status_code == 200
+    calls = {call["interaction_id"]: call for call in response.json()["calls"]}
+    assert set(calls) == {"first-call", "second-call"}
+    assert all(call["status"] == "created" for call in calls.values())
+    assert calls["first-call"]["processing"]["evaluation_status"] == "failed"
+    assert calls["first-call"]["processing"]["errors"][0]["stage"] == "evaluation"
+    assert calls["second-call"]["processing"]["evaluation_status"] == "ready"
+    assert calls["second-call"]["processing"]["evaluation_run_id"] == "second-run"
 
 
 def test_uploaded_batch_preserves_success_when_another_call_is_invalid(
