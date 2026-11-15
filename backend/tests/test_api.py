@@ -159,6 +159,9 @@ def test_canonical_interaction_and_benchmark_routes_remain_available():
     assert ("GET", "/api/v1/interactions/{interaction_id}/reviews") in routes
     assert ("POST", "/api/v1/interactions/{interaction_id}/artifacts") in routes
     assert ("GET", "/api/v1/golden-dataset/benchmark") in routes
+    assert ("GET", "/api/v1/imports/staged-calls") in routes
+    assert ("POST", "/api/v1/imports/staged-calls") in routes
+    assert ("POST", "/api/v1/imports/upload-calls") in routes
 
 
 def test_other_tenant_gets_404():

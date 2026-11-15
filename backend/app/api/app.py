@@ -1,25 +1,40 @@
-from dataclasses import asdict
+import hashlib
+import os
+import re
+import tempfile
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, Optional
 from urllib.parse import unquote, urlparse
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
 
 from app.analytics.service import AnalyticsService
 from app.core.logging import TraceLoggingMiddleware, configure_logging, get_logger
 from app.domain.envelope import ArtifactReference, InteractionEnvelope, InteractionEvent
 from app.evaluation.service import EvaluationService
+from app.ingestion.api_models import (
+    CallImportBatchResponse,
+    CallImportResultResponse,
+    StagedCallImportRequest,
+    StagedCallListResponse,
+    StagedCallSummary,
+)
+from app.ingestion.call_importer import CallFolderImporter, CallImportResult
 from app.ingestion.errors import IdempotencyConflict
 from app.ingestion.service import IngestResult, IngestionService
 from app.storage.artifact_reference_repo import (
     ArtifactReferenceConflict,
     ArtifactReferenceRepository,
 )
+from app.storage.artifacts import ArtifactStore, LocalArtifactStore
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.event_repo import EventConflict, EventRepository
 from app.storage.golden_repo import GoldenDatasetRepository
@@ -33,6 +48,209 @@ from app.validation.benchmark import BenchmarkEngine
 from app.validation.golden_loader import load_golden_dataset
 
 logger = get_logger("conversense.api")
+
+MAX_CALLS_PER_IMPORT = 100
+MAX_FILES_PER_CALL = 200
+MAX_FILES_PER_REQUEST = 10_000
+MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024
+MAX_REQUEST_SIZE_BYTES = 5 * 1024 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+def _validate_import_limits(file_sizes_by_call: list[list[int]]) -> None:
+    error = _import_limit_error(file_sizes_by_call)
+    if error:
+        raise HTTPException(status_code=413, detail=error)
+
+
+def _import_limit_error(file_sizes_by_call: list[list[int]]) -> str | None:
+    if len(file_sizes_by_call) > MAX_CALLS_PER_IMPORT:
+        return f"An import may contain at most {MAX_CALLS_PER_IMPORT} calls."
+    if any(len(sizes) > MAX_FILES_PER_CALL for sizes in file_sizes_by_call):
+        return f"A call may contain at most {MAX_FILES_PER_CALL} files."
+    if sum(len(sizes) for sizes in file_sizes_by_call) > MAX_FILES_PER_REQUEST:
+        return f"An import may contain at most {MAX_FILES_PER_REQUEST} files."
+    if any(
+        size < 0 or size > MAX_FILE_SIZE_BYTES
+        for sizes in file_sizes_by_call
+        for size in sizes
+    ):
+        return f"Each file must be at most {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MiB."
+    if sum(sum(sizes) for sizes in file_sizes_by_call) > MAX_REQUEST_SIZE_BYTES:
+        return f"An import may contain at most {MAX_REQUEST_SIZE_BYTES // (1024 * 1024 * 1024)} GiB."
+    return None
+
+
+def _tenant_staging_root(artifact_store: ArtifactStore, tenant_id: str) -> Path:
+    if (
+        not tenant_id
+        or tenant_id in {".", ".."}
+        or any(separator in tenant_id for separator in ("/", "\\", ":", "\x00"))
+    ):
+        raise HTTPException(status_code=400, detail="Invalid tenant identifier")
+
+    base_dir = artifact_store.base_dir.resolve()
+    tenant_candidate = base_dir / tenant_id
+    if tenant_candidate.is_symlink():
+        raise HTTPException(status_code=400, detail="Invalid staged folder location")
+    tenant_root = tenant_candidate.resolve()
+    if tenant_root.parent != base_dir:
+        raise HTTPException(status_code=400, detail="Invalid staged folder location")
+    return tenant_root
+
+
+def _is_link_or_junction(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or (is_junction is not None and is_junction())
+
+
+def _scan_staged_folder(folder: Path) -> tuple[list[Path], list[str]]:
+    files: list[Path] = []
+    errors: list[str] = []
+    pending = [folder]
+    while pending:
+        current = pending.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    if _is_link_or_junction(path):
+                        errors.append("Symbolic links are not allowed in staged calls.")
+                    elif entry.is_dir(follow_symlinks=False):
+                        pending.append(path)
+                    elif entry.is_file(follow_symlinks=False):
+                        files.append(path)
+                    else:
+                        errors.append("Staged calls may contain only regular files and folders.")
+        except OSError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="A staged folder could not be safely inspected.",
+            ) from exc
+    return files, errors
+
+
+def _safe_validation_errors(folder: Path) -> list[str]:
+    from app.validation.audio import validate_call_files
+
+    validation = validate_call_files(folder)
+    folder_path = str(folder.resolve())
+    return [
+        message.replace(folder_path, folder.name)
+        for message in validation.errors
+    ]
+
+
+def _staged_folder_id(tenant_id: str, folder_name: str) -> str:
+    digest = hashlib.sha256(
+        f"conversense-staged-folder\0{tenant_id}\0{folder_name}".encode("utf-8")
+    ).hexdigest()
+    return digest[:32]
+
+
+def _list_staged_folders(
+    artifact_store: ArtifactStore,
+    tenant_id: str,
+) -> tuple[Path, list[tuple[Path, StagedCallSummary, list[int], bool]]]:
+    tenant_root = _tenant_staging_root(artifact_store, tenant_id)
+    if not tenant_root.exists():
+        return tenant_root, []
+
+    folders: list[tuple[Path, StagedCallSummary, list[int], bool]] = []
+    try:
+        with os.scandir(tenant_root) as entries:
+            candidates = sorted(entries, key=lambda entry: entry.name.casefold())
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Staged calls could not be safely listed.",
+        ) from exc
+
+    for entry in candidates:
+        folder = Path(entry.path)
+        if _is_link_or_junction(folder) or not entry.is_dir(follow_symlinks=False):
+            continue
+        resolved_folder = folder.resolve()
+        if resolved_folder.parent != tenant_root:
+            continue
+        files, scan_errors = _scan_staged_folder(resolved_folder)
+        sizes = [path.stat().st_size for path in files]
+        validation_errors = list(scan_errors)
+        if not scan_errors:
+            validation_errors.extend(_safe_validation_errors(resolved_folder))
+        if len(files) > MAX_FILES_PER_CALL:
+            validation_errors.append(
+                f"A call may contain at most {MAX_FILES_PER_CALL} files."
+            )
+        if any(size > MAX_FILE_SIZE_BYTES for size in sizes):
+            validation_errors.append(
+                f"Each file must be at most {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MiB."
+            )
+        summary = StagedCallSummary(
+            folder_id=_staged_folder_id(tenant_id, entry.name),
+            display_name=entry.name,
+            is_ready=not validation_errors,
+            validation_errors=validation_errors,
+        )
+        folders.append((resolved_folder, summary, sizes, bool(scan_errors)))
+    return tenant_root, folders
+
+
+def _batch_response(results: list[CallImportResult]) -> CallImportBatchResponse:
+    return CallImportBatchResponse(
+        total_calls=len(results),
+        created=sum(result.status == "created" for result in results),
+        replayed=sum(result.status == "replayed" for result in results),
+        failed=sum(result.status not in {"created", "replayed"} for result in results),
+        calls=[
+            CallImportResultResponse.model_validate(asdict(result))
+            for result in results
+        ],
+    )
+
+
+def _normalize_upload_filename(filename: str | None) -> tuple[str, ...]:
+    if not filename or "\x00" in filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Each uploaded file needs a safe relative path.",
+        )
+    normalized = filename.replace("\\", "/")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise HTTPException(status_code=400, detail="Rooted upload paths are not allowed.")
+    parts = normalized.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail="Unsafe upload path.")
+    return tuple(parts)
+
+
+def _group_upload_paths(
+    file_paths: list[tuple[str, ...]],
+) -> dict[tuple[str, ...], list[tuple[str, ...]]]:
+    parent_paths = [path[:-1] for path in file_paths]
+    common_parent: list[str] = []
+    for parts in zip(*parent_paths):
+        if len({part.casefold() for part in parts}) != 1:
+            break
+        common_parent.append(parts[0])
+
+    common_tuple = tuple(common_parent)
+    if all(parent == common_tuple for parent in parent_paths) or any(
+        parent == common_tuple for parent in parent_paths
+    ):
+        root = common_tuple
+        return {root: file_paths}
+
+    groups: dict[tuple[str, ...], list[tuple[str, ...]]] = {}
+    for path, parent in zip(file_paths, parent_paths):
+        if len(parent) > len(common_tuple):
+            root = common_tuple + (parent[len(common_tuple)],)
+        else:
+            root = common_tuple
+        groups.setdefault(root, []).append(path)
+    return groups
+
+
 class IngestResponse(BaseModel):
     created: bool
     interaction: InteractionEnvelope
@@ -55,10 +273,14 @@ class HumanReviewSubmission(BaseModel):
     notes: Optional[str] = None
 
 
-def create_app(session_factory) -> FastAPI:
+def create_app(
+    session_factory,
+    artifact_store: ArtifactStore | None = None,
+) -> FastAPI:
     configure_logging()
     app = FastAPI(title="Conversense AI - Health Call Observability & Evaluation")
     app.state.session_factory = session_factory
+    app.state.artifact_store = artifact_store or LocalArtifactStore()
     app.add_middleware(TraceLoggingMiddleware)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
@@ -82,6 +304,9 @@ def create_app(session_factory) -> FastAPI:
 
     def get_ingest_service() -> IngestionService:
         return IngestionService(session_factory)
+
+    def get_call_importer() -> CallFolderImporter:
+        return CallFolderImporter(session_factory, app.state.artifact_store)
 
     def get_eval_service() -> EvaluationService:
         return EvaluationService(session_factory)
@@ -107,6 +332,176 @@ def create_app(session_factory) -> FastAPI:
         if x_tenant_id is None or not x_tenant_id.strip():
             raise HTTPException(status_code=401, detail="X-Tenant-Id is required")
         return x_tenant_id
+
+    @app.get(
+        "/api/v1/imports/staged-calls",
+        response_model=StagedCallListResponse,
+    )
+    def list_staged_calls(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        _, folders = _list_staged_folders(app.state.artifact_store, tenant_id)
+        return StagedCallListResponse(calls=[summary for _, summary, _, _ in folders])
+
+    @app.post(
+        "/api/v1/imports/staged-calls",
+        response_model=CallImportBatchResponse,
+    )
+    def import_staged_calls(
+        body: StagedCallImportRequest,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        if len(set(body.folder_ids)) != len(body.folder_ids):
+            raise HTTPException(
+                status_code=400,
+                detail="Duplicate staged folder IDs are not allowed.",
+            )
+        _, available_folders = _list_staged_folders(app.state.artifact_store, tenant_id)
+        folders_by_id = {
+            summary.folder_id: (folder, sizes, unsafe)
+            for folder, summary, sizes, unsafe in available_folders
+        }
+        selected = []
+        for folder_id in body.folder_ids:
+            selected_folder = folders_by_id.get(folder_id)
+            if selected_folder is None:
+                raise HTTPException(status_code=404, detail="Staged folder not found.")
+            selected.append(selected_folder)
+
+        if any(unsafe for _, _, unsafe in selected):
+            raise HTTPException(status_code=400, detail="A staged folder contains an unsafe entry.")
+        _validate_import_limits([sizes for _, sizes, _ in selected])
+
+        importer = get_call_importer()
+        results = [
+            importer.import_call(folder, tenant_id)
+            for folder, _, _ in selected
+        ]
+        return _batch_response(results)
+
+    @app.post(
+        "/api/v1/imports/upload-calls",
+        response_model=CallImportBatchResponse,
+    )
+    async def upload_call_folders(
+        request: Request,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        try:
+            form = await request.form(
+                max_files=MAX_FILES_PER_REQUEST + 1,
+                max_fields=0,
+            )
+        except HTTPException as exc:
+            if "Too many files" in str(exc.detail):
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"An import may contain at most {MAX_FILES_PER_REQUEST} files.",
+                ) from exc
+            raise
+
+        files: list[UploadFile] = []
+        normalized_paths: list[tuple[str, ...]] = []
+        try:
+            for field_name, value in form.multi_items():
+                if field_name != "files" or not isinstance(value, UploadFile):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Only uploaded files are accepted.",
+                    )
+                files.append(value)
+            if not files:
+                raise HTTPException(status_code=400, detail="At least one file is required.")
+            if len(files) > MAX_FILES_PER_REQUEST:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"An import may contain at most {MAX_FILES_PER_REQUEST} files.",
+                )
+
+            for upload in files:
+                normalized_paths.append(_normalize_upload_filename(upload.filename))
+            path_keys = [tuple(part.casefold() for part in path) for path in normalized_paths]
+            if len(set(path_keys)) != len(path_keys):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Duplicate upload paths are not allowed.",
+                )
+
+            grouped_paths = _group_upload_paths(normalized_paths)
+            _validate_import_limits(
+                [[0] * len(paths) for paths in grouped_paths.values()]
+            )
+
+            importer = get_call_importer()
+            results: list[CallImportResult] = []
+            total_bytes = 0
+            with tempfile.TemporaryDirectory(prefix="conversense-call-upload-") as temp_dir:
+                temp_root = Path(temp_dir)
+                staged_folders: list[tuple[Path, str, list[int]]] = []
+                group_indexes = {
+                    path: index for index, path in enumerate(grouped_paths)
+                }
+                file_sizes: dict[tuple[str, ...], list[int]] = {
+                    path: [] for path in grouped_paths
+                }
+                for upload, relative_path in zip(files, normalized_paths):
+                    group_path = next(
+                        root
+                        for root, group_files in grouped_paths.items()
+                        if relative_path in group_files
+                    )
+                    group_index = group_indexes[group_path]
+                    call_dir = temp_root / f"call-{group_index}"
+                    relative_to_call = (
+                        relative_path[len(group_path):]
+                        if group_path
+                        else relative_path
+                    )
+                    destination = call_dir.joinpath(*relative_to_call)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    size = 0
+                    try:
+                        with destination.open("xb") as output:
+                            while True:
+                                chunk = await upload.read(UPLOAD_CHUNK_SIZE)
+                                if not chunk:
+                                    break
+                                size += len(chunk)
+                                total_bytes += len(chunk)
+                                if size > MAX_FILE_SIZE_BYTES:
+                                    raise HTTPException(
+                                        status_code=413,
+                                        detail="Each file must be at most 512 MiB.",
+                                    )
+                                if total_bytes > MAX_REQUEST_SIZE_BYTES:
+                                    raise HTTPException(
+                                        status_code=413,
+                                        detail="An import may contain at most 5 GiB.",
+                                    )
+                                output.write(chunk)
+                    except OSError as exc:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="An uploaded file could not be staged safely.",
+                        ) from exc
+                    file_sizes[group_path].append(size)
+                _validate_import_limits(list(file_sizes.values()))
+
+                for group_path, index in group_indexes.items():
+                    display_name = group_path[-1] if group_path else "Uploaded call"
+                    staged_folders.append(
+                        (temp_root / f"call-{index}", display_name, file_sizes[group_path])
+                    )
+                for folder, display_name, _ in staged_folders:
+                    result = await run_in_threadpool(
+                        importer.import_call,
+                        folder,
+                        tenant_id,
+                    )
+                    results.append(replace(result, folder_name=display_name))
+            return _batch_response(results)
+        finally:
+            await form.close()
 
     # Ingestion Endpoints
     @app.post("/api/v1/interactions", response_model=IngestResponse)
