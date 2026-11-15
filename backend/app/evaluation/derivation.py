@@ -254,6 +254,19 @@ def _candidate_from_record(record: Any, category: str) -> FailureCandidate:
     )
 
 
+def _timeline_failures(timeline: Any, category: str) -> list[Any]:
+    return [
+        failure
+        for failure in getattr(timeline, "failures", ())
+        if getattr(
+            getattr(failure, "category", None),
+            "value",
+            getattr(failure, "category", None),
+        )
+        == category
+    ]
+
+
 def _ordered_candidates(
     candidates: list[FailureCandidate],
 ) -> list[FailureCandidate] | None:
@@ -392,20 +405,32 @@ def derive_evaluation_summary(
     elif appointment_validation.status == "VALID":
         pass
 
-    technical_failures = (
-        [timeline.first_technical_failure]
-        if (
-            timeline
-            and timeline.first_technical_failure
-            and timeline.first_technical_failure.failure_type != "LATE_AGENT_OPENING"
+    timeline_ordering_unknown = bool(
+        timeline
+        and (
+            getattr(timeline, "technical_failure_ordering_unknown", False)
+            or getattr(timeline, "conversational_failure_ordering_unknown", False)
         )
-        else []
     )
-    conversational_failures = (
-        [timeline.first_conversational_failure]
-        if timeline and timeline.first_conversational_failure
-        else []
-    )
+    if timeline_ordering_unknown:
+        technical_failures = _timeline_failures(timeline, "technical")
+        conversational_failures = _timeline_failures(timeline, "conversational")
+    else:
+        technical_failures = (
+            [timeline.first_technical_failure]
+            if (
+                timeline
+                and timeline.first_technical_failure
+                and timeline.first_technical_failure.failure_type
+                != "LATE_AGENT_OPENING"
+            )
+            else []
+        )
+        conversational_failures = (
+            [timeline.first_conversational_failure]
+            if timeline and timeline.first_conversational_failure
+            else []
+        )
     compliance_failures = [
         FailureCandidate(
             category="compliance",
@@ -424,6 +449,12 @@ def derive_evaluation_summary(
         conversational_failures,
         compliance_failures,
     )
+    if timeline_ordering_unknown:
+        first_failure = FirstFailureSummary(
+            "unknown",
+            None,
+            first_failure.critical_failures,
+        )
 
     outcome = _batch_outcome(understanding, "outcome")
     understanding_data = _as_mapping(understanding) or {}

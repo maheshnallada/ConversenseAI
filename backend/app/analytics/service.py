@@ -14,12 +14,14 @@ from app.storage.orm import (
     InteractionEventRow,
 )
 from app.observability.calculator import calculate_percentiles
+from app.observability.config import RateCardManager
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.observability_repo import aggregate_cost_rows
 
 class AnalyticsService:
     def __init__(self, session_factory: sessionmaker):
         self.session_factory = session_factory
+        self.rate_card = RateCardManager()
 
     @staticmethod
     def _latest_runs(session, tenant_id: str):
@@ -260,11 +262,49 @@ class AnalyticsService:
             input_values = interaction_input + evaluation_input
             output_values = interaction_output + evaluation_output
             usage_available = bool(input_values or output_values)
-            total_cost, currency, cost_by_currency = aggregate_cost_rows(metrics_rows)
-            all_costs_available = bool(metrics_rows) and all(
-                row.total_cost is not None for row in metrics_rows
+            metrics_total_cost, _, cost_by_currency = aggregate_cost_rows(metrics_rows)
+            evaluation_costs = [
+                self.rate_card.calculate_llm_cost(
+                    batch.model,
+                    batch.input_tokens,
+                    batch.output_tokens,
+                )
+                for batch in batches
+            ]
+            evaluation_costs_available = all(
+                cost is not None for cost in evaluation_costs
             )
-            if not all_costs_available:
+            evaluation_total_cost = (
+                sum(evaluation_costs)
+                if evaluation_costs_available
+                else None
+            )
+            if batches and evaluation_total_cost is not None:
+                cost_currency = self.rate_card.currency
+                cost_by_currency[cost_currency] = round(
+                    cost_by_currency.get(cost_currency, 0.0)
+                    + evaluation_total_cost,
+                    4,
+                )
+
+            all_costs_available = (
+                bool(metrics_rows or batches)
+                and all(row.total_cost is not None for row in metrics_rows)
+                and evaluation_costs_available
+            )
+            available_currencies = set(cost_by_currency)
+            if not metrics_rows and batches:
+                available_currencies.add(self.rate_card.currency)
+            if (
+                all_costs_available
+                and len(available_currencies) == 1
+                and "UNKNOWN" not in available_currencies
+            ):
+                currency = next(iter(available_currencies))
+                total_cost = (metrics_total_cost or 0.0) + (
+                    evaluation_total_cost or 0.0
+                )
+            else:
                 total_cost = None
                 currency = None
             rate_card_versions = sorted(
@@ -276,6 +316,9 @@ class AnalyticsService:
                     if isinstance(data.get("rate_card_version"), str)
                 }
             )
+            if batches and isinstance(self.rate_card.version, str):
+                rate_card_versions.append(self.rate_card.version)
+                rate_card_versions = sorted(set(rate_card_versions))
 
             return {
                 "usage_available": usage_available,

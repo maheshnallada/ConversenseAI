@@ -357,3 +357,18 @@ def test_dashboard_uses_paginated_interactions_and_has_no_local_ingest_surface()
         "seedAll",
     ):
         assert legacy_api not in client_source
+
+
+def test_timeline_turn_card_keeps_unknown_speaker_and_timing_unavailable():
+    from pathlib import Path
+
+    repository_root = Path(__file__).resolve().parents[2]
+    source = (
+        repository_root / "frontend" / "src" / "components" / "TimelineTurnCard.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "Unknown speaker" in source
+    assert "Unavailable" in source
+    assert "disabled={seekTarget === null}" in source
+    assert "event.start_s ?? 0" not in source
+    assert "event.end_s ?? 0" not in source

@@ -431,3 +431,61 @@ def test_usage_includes_completed_provider_reported_evaluation_batch_tokens():
     assert usage["input_tokens"] == 13
     assert usage["output_tokens"] == 8
 
+
+def test_usage_includes_rate_card_cost_for_evaluation_batches():
+    service, factory = _isolated_service()
+    now = datetime.now(timezone.utc)
+    run = _evaluation_run(
+        "tenant_eval_cost",
+        "call_eval_cost",
+        "run-eval-cost",
+        now,
+        "Good",
+        "Expert call booked",
+        "NOT_DETECTED",
+    )
+    for batch in run.batches:
+        batch.model = "gemini-3.5-flash-lite"
+        batch.input_tokens = 1_000
+        batch.output_tokens = 500
+    EvaluationRepository(factory).save_run(run)
+
+    usage = service.get_usage_analytics("tenant_eval_cost")
+
+    assert usage["estimated_cost"] == pytest.approx(0.00465)
+    assert usage["currency"] == "USD"
+    assert usage["cost_availability"] == "available"
+    assert "2026-11-14" in usage["rate_card_versions"]
+
+
+def test_usage_marks_total_cost_unavailable_when_evaluation_batch_is_unpriced():
+    service, factory = _isolated_service()
+    ObservabilityRepository(factory).save_metrics(
+        _cost_metrics(
+            "call-priced-interaction",
+            "USD",
+            0.25,
+            tenant_id="tenant_partial_cost",
+        )
+    )
+    now = datetime.now(timezone.utc)
+    run = _evaluation_run(
+        "tenant_partial_cost",
+        "call-unpriced-evaluation",
+        "run-unpriced-evaluation",
+        now,
+        "Good",
+        "Expert call booked",
+        "NOT_DETECTED",
+    )
+    for batch in run.batches:
+        batch.model = "unpriced-model"
+        batch.input_tokens = 1_000
+        batch.output_tokens = 500
+    EvaluationRepository(factory).save_run(run)
+
+    usage = service.get_usage_analytics("tenant_partial_cost")
+
+    assert usage["estimated_cost"] is None
+    assert usage["cost_availability"] == "unavailable"
+

@@ -285,6 +285,38 @@ def test_late_agent_opening_metric_alone_is_not_a_failure():
     assert result.first_failure.first_failure is None
 
 
+def test_failure_summary_remains_unknown_when_timeline_order_is_unknown():
+    timeline = SimpleNamespace(
+        first_technical_failure=None,
+        first_conversational_failure=None,
+        technical_failure_ordering_unknown=True,
+        conversational_failure_ordering_unknown=False,
+        failures=[
+            FailureCandidate(
+                category="technical",
+                failure_type="first_candidate",
+                time_s=None,
+                turn_index=1,
+            ),
+            FailureCandidate(
+                category="technical",
+                failure_type="unlocated_candidate",
+                time_s=None,
+                turn_index=None,
+            ),
+        ],
+    )
+
+    result = derive_evaluation_summary(
+        batch_results={},
+        timeline=timeline,
+        appointment_validation=None,
+    )
+
+    assert result.first_failure.status == "unknown"
+    assert result.first_failure.first_failure is None
+
+
 def test_equal_timestamps_with_incomplete_sequence_are_ambiguous():
     with_line = FailureCandidate(
         category="technical",

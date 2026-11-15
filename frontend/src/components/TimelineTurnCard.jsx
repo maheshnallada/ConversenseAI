@@ -27,9 +27,22 @@ export default function TimelineTurnCard({
   const expanded = forceExpand !== null ? forceExpand : isOpen;
 
   const isAgent = event.speaker === 'agent';
-  const start = event.start_s ?? 0;
-  const end = event.end_s ?? 0;
-  const duration = event.duration_s ?? (end - start);
+  const isCustomer = event.speaker === 'customer';
+  const speakerLabel = isAgent
+    ? 'Agent (Voice Bot)'
+    : isCustomer
+      ? 'Customer'
+      : typeof event.speaker === 'string' && event.speaker.trim()
+        ? `Unknown speaker (${event.speaker})`
+        : 'Unknown speaker';
+  const start = event.start_s;
+  const end = event.end_s;
+  const duration = event.duration_s ?? (
+    typeof start === 'number' && typeof end === 'number' ? end - start : null
+  );
+  const seekTarget = typeof start === 'number' && Number.isFinite(start) && start >= 0
+    ? start
+    : null;
   const meta = event.metadata || {};
   const reportedDeliveryStatus = typeof event.delivery_status === 'string'
     ? event.delivery_status
@@ -51,7 +64,9 @@ export default function TimelineTurnCard({
   const deliveryEvidence = meta.delivery_evidence ?? null;
 
   const formatTime = (secs) => {
-    if (secs === null || secs === undefined || isNaN(secs)) return '00:00.0';
+    if (typeof secs !== 'number' || !Number.isFinite(secs) || secs < 0) {
+      return 'Unavailable';
+    }
     const m = Math.floor(secs / 60);
     const s = (secs % 60).toFixed(1);
     return `${m.toString().padStart(2, '0')}:${s.padStart(4, '0')}`;
@@ -109,7 +124,9 @@ export default function TimelineTurnCard({
           ? 'bg-white dark:bg-slate-900 border-cyan-500 ring-2 ring-cyan-500/40 shadow-md'
           : isAgent
           ? 'bg-white dark:bg-[#0d1424]/90 border-slate-200 dark:border-slate-800/80 hover:border-slate-300 dark:hover:border-slate-700'
-          : 'bg-white dark:bg-[#0c181f]/80 border-slate-200 dark:border-slate-800/70 hover:border-slate-300 dark:hover:border-slate-700'
+          : isCustomer
+            ? 'bg-white dark:bg-[#0c181f]/80 border-slate-200 dark:border-slate-800/70 hover:border-slate-300 dark:hover:border-slate-700'
+            : 'bg-white dark:bg-slate-900/80 border-slate-200 dark:border-slate-800/70 hover:border-slate-300 dark:hover:border-slate-700'
       }`}
     >
       {/* Turn Header */}
@@ -120,18 +137,24 @@ export default function TimelineTurnCard({
             className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-sm ${
               isAgent
                 ? 'bg-cyan-100 text-cyan-700 border border-cyan-200 dark:bg-cyan-500/15 dark:text-cyan-400 dark:border-cyan-500/30'
-                : 'bg-emerald-100 text-emerald-700 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/30'
+                : isCustomer
+                  ? 'bg-emerald-100 text-emerald-700 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/30'
+                  : 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
             }`}
           >
-            {isAgent ? <Bot className="w-4 h-4" /> : <User className="w-4 h-4" />}
+            {isAgent ? <Bot className="w-4 h-4" /> : isCustomer ? <User className="w-4 h-4" /> : <Info className="w-4 h-4" />}
           </div>
 
           <span
             className={`text-xs font-bold uppercase tracking-wider ${
-              isAgent ? 'text-cyan-700 dark:text-cyan-400' : 'text-emerald-700 dark:text-emerald-400'
+              isAgent
+                ? 'text-cyan-700 dark:text-cyan-400'
+                : isCustomer
+                  ? 'text-emerald-700 dark:text-emerald-400'
+                  : 'text-slate-600 dark:text-slate-400'
             }`}
           >
-            {isAgent ? 'Agent (Voice Bot)' : 'Customer'}
+            {speakerLabel}
           </span>
 
           <span className="text-slate-300 dark:text-slate-600">&bull;</span>
@@ -140,7 +163,11 @@ export default function TimelineTurnCard({
           <div className="flex items-center gap-1 text-[11px] font-mono text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-950/60 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-800/60">
             <Clock className="w-3 h-3 text-slate-400 dark:text-slate-500" />
             <span>{formatTime(start)} &ndash; {formatTime(end)}</span>
-            <span className="text-slate-400 dark:text-slate-500">({duration.toFixed(1)}s)</span>
+            <span className="text-slate-400 dark:text-slate-500">
+              ({typeof duration === 'number' && Number.isFinite(duration) && duration >= 0
+                ? `${duration.toFixed(1)}s`
+                : 'Unavailable'})
+            </span>
           </div>
         </div>
 
@@ -149,8 +176,11 @@ export default function TimelineTurnCard({
           {getDeliveryPill()}
 
           <button
-            onClick={() => onSeek && onSeek(start)}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800/80 hover:bg-cyan-500 hover:text-slate-950 text-slate-700 dark:text-slate-300 text-[11px] font-mono transition-all group shadow-sm border border-slate-200 dark:border-slate-700/60"
+            disabled={seekTarget === null}
+            onClick={() => seekTarget !== null && onSeek && onSeek(seekTarget)}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800/80 hover:bg-cyan-500 hover:text-slate-950 text-slate-700 dark:text-slate-300 text-[11px] font-mono transition-all group shadow-sm border border-slate-200 dark:border-slate-700/60 ${
+              seekTarget === null ? 'cursor-not-allowed opacity-50' : ''
+            }`}
             title="Jump audio to this turn"
           >
             <Play className="w-3 h-3 fill-current text-cyan-600 dark:text-cyan-400 group-hover:text-slate-950" />

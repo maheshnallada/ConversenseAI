@@ -58,8 +58,16 @@ export const api = {
       headers: { 'X-Tenant-Id': tenant },
     }),
 
-  getTimeline: (id, tenant = 'health_campaign') =>
-    request(`/interactions/${encodeURIComponent(id)}/timeline`, { headers: { 'X-Tenant-Id': tenant } }),
+  getTimeline: async (id, tenant = 'health_campaign') => {
+    try {
+      return await request(`/interactions/${encodeURIComponent(id)}/timeline`, {
+        headers: { 'X-Tenant-Id': tenant },
+      });
+    } catch (error) {
+      if (error.status === 404) return null;
+      throw error;
+    }
+  },
 
   getEvaluations: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/evaluations`, { headers: { 'X-Tenant-Id': tenant } }),
