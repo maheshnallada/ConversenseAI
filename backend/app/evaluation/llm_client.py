@@ -1,7 +1,7 @@
 import os
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 from openai import APIError, AsyncOpenAI, LengthFinishReasonError, OpenAI

@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pytest
 from openai import APITimeoutError, LengthFinishReasonError, RateLimitError
@@ -12,6 +13,10 @@ from app.evaluation.errors import (
     LLMResponseError,
 )
 from app.evaluation.llm_client import LLMClient, complete_structured
+
+
+def test_chat_completion_return_annotation_resolves():
+    assert get_type_hints(LLMClient.chat_completion)["return"] == str | BaseModel | None
 
 
 def _mock_sdk_client(monkeypatch, *, parsed=None, content="ok", error=None):
