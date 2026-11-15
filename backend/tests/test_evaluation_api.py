@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+﻿from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -48,6 +48,42 @@ def _run(run_id, started_at, batch_status="completed"):
         review_required=False,
         review_reasons=[],
     )
+
+
+def test_evaluate_endpoint_uses_default_interaction_namespace(session_factory, monkeypatch):
+    from app.api import app as api_module
+
+    seen = {}
+
+    class StubEvaluationService:
+        def __init__(self, _session_factory):
+            pass
+
+        def evaluate_interaction(self, tenant_id, interaction_id, retry_from_run_id=None):
+            seen["tenant_id"] = tenant_id
+            seen["interaction_id"] = interaction_id
+            seen["retry_from_run_id"] = retry_from_run_id
+            return _run("run-default", datetime.now(timezone.utc))
+
+    monkeypatch.setattr(api_module, "EvaluationService", StubEvaluationService)
+    app = create_app(session_factory)
+    route = next(
+        route for route in app.routes
+        if route.path == "/api/v1/interactions/{interaction_id}/evaluate"
+    )
+
+    result = route.endpoint(
+        "call_01",
+        "tenant_001",
+        EvaluateInteractionRequest(),
+    )
+
+    assert seen == {
+        "tenant_id": "tenant_001",
+        "interaction_id": "call_01",
+        "retry_from_run_id": None,
+    }
+    assert result["run_id"] == "run-default"
 
 
 def test_evaluate_endpoint_accepts_retry_source_and_returns_partial_run(
@@ -253,4 +289,3 @@ def test_review_required_compliance_batch_does_not_drive_appointment_validation(
     )
 
     assert result is None
-

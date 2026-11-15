@@ -1,19 +1,24 @@
+﻿import asyncio
 from datetime import datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.pool import StaticPool
 
-from app.storage.db import create_session_factory, init_db
-from app.storage.evaluation_repo import EvaluationRepository
 from app.domain.envelope import InteractionEnvelope
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.evaluation.service import EvaluationService
 from app.storage import orm
+from app.storage.db import create_session_factory, init_db
+from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.orm import InteractionRow
 
 
 def _factory():
-    f = create_session_factory("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    f = create_session_factory(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     init_db(f)
     return f
 
@@ -64,8 +69,6 @@ def _sample_batch(
     batch_name="conversation_understanding",
     evaluation_namespace="interaction",
 ):
-    from datetime import datetime, timezone
-
     now = datetime.now(timezone.utc)
     return EvaluationBatchRecord(
         evaluation_id=evaluation_id,
@@ -98,8 +101,6 @@ def _sample_run(
     interaction_id="call_batched",
     evaluation_namespace="interaction",
 ):
-    from datetime import datetime, timezone
-
     now = datetime.now(timezone.utc)
     return EvaluationRun(
         run_id=run_id,
@@ -220,6 +221,80 @@ def test_evaluation_namespace_scopes_run_and_batch_round_trips():
     )
 
 
+def test_input_evaluation_uses_requested_namespace_without_loading_interaction_row():
+    factory = _factory()
+    service = EvaluationService(factory)
+    envelope = InteractionEnvelope(
+        tenant_id="tenant_eval",
+        interaction_id="call_input",
+        schema_version="1.0",
+    )
+    turns = [
+        {
+            "turn_id": "turn-1",
+            "interaction_id": "call_input",
+            "tenant_id": "tenant_eval",
+            "turn_index": 1,
+            "speaker": "customer",
+            "raw_text": "Hello there",
+            "normalized_text": "hello there",
+        }
+    ]
+
+    captured = {}
+
+    class StubRegistry:
+        async def evaluate_batches(self, interaction, turns, timeline=None, batch_names=None):
+            captured["interaction"] = interaction
+            captured["turns"] = turns
+            captured["timeline"] = timeline
+            captured["batch_names"] = batch_names
+            batch = _sample_batch("golden-batch", evaluation_namespace="golden_dataset")
+            return EvaluationRun(
+                run_id="run-input-golden",
+                tenant_id=interaction.tenant_id,
+                interaction_id=interaction.interaction_id,
+                batches=[batch],
+                summary={"overall_assessment": "Good"},
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+                review_required=False,
+                review_reasons=[],
+                evaluation_namespace="golden_dataset",
+            )
+
+    service.registry = StubRegistry()
+
+    run = asyncio.run(
+        service.evaluate_input(
+            envelope,
+            turns,
+            evaluation_namespace="golden_dataset",
+        )
+    )
+
+    assert captured["interaction"] is envelope
+    assert captured["turns"] is turns
+    assert captured["timeline"] is None
+    assert captured["batch_names"] is None
+    assert run.evaluation_namespace == "golden_dataset"
+    assert run.batches[0].evaluation_namespace == "golden_dataset"
+    assert service.eval_repo.get_run(
+        "tenant_eval",
+        "call_input",
+        "run-input-golden",
+        evaluation_namespace="golden_dataset",
+    ) is not None
+    with factory() as session:
+        assert session.scalar(
+            text(
+                "SELECT COUNT(*) FROM interactions WHERE tenant_id = :tenant_id "
+                "AND interaction_id = :interaction_id"
+            ),
+            {"tenant_id": "tenant_eval", "interaction_id": "call_input"},
+        ) == 0
+
+
 def test_init_db_migrates_existing_evaluations_to_interaction_namespace():
     factory = create_session_factory(
         "sqlite://",
@@ -269,8 +344,6 @@ def test_init_db_migrates_existing_evaluations_to_interaction_namespace():
 
 
 def test_service_retry_only_reruns_failed_batches_and_carries_successes():
-    from datetime import datetime, timezone
-
     factory = _factory()
     envelope = InteractionEnvelope(
         tenant_id="tenant_eval",
@@ -301,8 +374,6 @@ def test_service_retry_only_reruns_failed_batches_and_carries_successes():
             timeline=None,
             batch_names=None,
         ):
-            from datetime import datetime, timezone
-
             names = (
                 batch_names
                 if batch_names is not None
@@ -368,4 +439,5 @@ def test_service_retry_only_reruns_failed_batches_and_carries_successes():
     assert latest is not None
     assert latest.run_id == second.run_id
     assert service.eval_repo.get_latest_run("other_tenant", "call_retry") is None
+
 

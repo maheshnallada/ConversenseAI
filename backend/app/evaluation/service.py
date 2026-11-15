@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import copy
 import json
 from dataclasses import replace
@@ -11,6 +11,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.domain.envelope import InteractionEnvelope
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
+from app.domain.timeline import ReconstructedTimeline
+from app.domain.transcript import TranscriptTurn
 from app.evaluation.derivation import (
     AppointmentValidation,
     derive_appointment_validity,
@@ -21,6 +23,7 @@ from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.transcript_repo import TranscriptRepository
 from app.storage.timeline_repo import TimelineRepository
 from app.storage.orm import InteractionRow
+
 
 class EvaluationService:
     def __init__(
@@ -33,6 +36,25 @@ class EvaluationService:
         self.eval_repo = EvaluationRepository(session_factory)
         self.transcript_repo = TranscriptRepository(session_factory)
         self.timeline_repo = TimelineRepository(session_factory)
+
+    async def evaluate_input(
+        self,
+        interaction: InteractionEnvelope,
+        turns: list[TranscriptTurn],
+        evaluation_namespace: str = "interaction",
+        timeline: ReconstructedTimeline | None = None,
+    ) -> EvaluationRun:
+        """
+        Evaluates a supplied interaction envelope and transcript without loading a
+        persisted interaction record. The run and its batches are scoped to the
+        requested evaluation namespace.
+        """
+        return await self._evaluate_context(
+            interaction,
+            turns,
+            evaluation_namespace=evaluation_namespace,
+            timeline=timeline,
+        )
 
     def evaluate_interaction(
         self,
@@ -50,18 +72,37 @@ class EvaluationService:
 
         turns = self.transcript_repo.get_turns(tenant_id, interaction_id)
         timeline = self.timeline_repo.get_timeline(tenant_id, interaction_id)
+        return asyncio.run(
+            self._evaluate_context(
+                envelope,
+                turns,
+                evaluation_namespace="interaction",
+                timeline=timeline,
+                retry_from_run_id=retry_from_run_id,
+            )
+        )
+
+    async def _evaluate_context(
+        self,
+        interaction: InteractionEnvelope,
+        turns: list[TranscriptTurn],
+        evaluation_namespace: str,
+        timeline: ReconstructedTimeline | None = None,
+        retry_from_run_id: str | None = None,
+    ) -> EvaluationRun:
         previous_run = None
         retry_batches: set[str] | None = None
         if retry_from_run_id is not None:
             previous_run = self.eval_repo.get_run(
-                tenant_id,
-                interaction_id,
+                interaction.tenant_id,
+                interaction.interaction_id,
                 retry_from_run_id,
+                evaluation_namespace=evaluation_namespace,
             )
             if previous_run is None:
                 raise ValueError(
                     f"Evaluation run {retry_from_run_id} was not found for "
-                    f"{tenant_id}:{interaction_id}."
+                    f"{interaction.tenant_id}:{interaction.interaction_id}."
                 )
             retry_batches = {
                 batch.batch_name
@@ -69,13 +110,11 @@ class EvaluationService:
                 if batch.status == "failed"
             }
 
-        evaluated_run = asyncio.run(
-            self.registry.evaluate_batches(
-                interaction=envelope,
-                turns=turns,
-                timeline=timeline,
-                batch_names=retry_batches,
-            )
+        evaluated_run = await self.registry.evaluate_batches(
+            interaction=interaction,
+            turns=turns,
+            timeline=timeline,
+            batch_names=retry_batches,
         )
         if previous_run is not None:
             evaluated_names = {batch.batch_name for batch in evaluated_run.batches}
@@ -90,8 +129,12 @@ class EvaluationService:
             ]
             evaluated_run.batches = carried_forward + evaluated_run.batches
 
+        evaluated_run.evaluation_namespace = evaluation_namespace
+        for batch in evaluated_run.batches:
+            batch.evaluation_namespace = evaluation_namespace
+
         appointment_validation = self._derive_appointment_validation(
-            envelope,
+            interaction,
             evaluated_run.batches,
         )
         available_results = {
