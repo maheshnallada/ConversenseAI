@@ -28,6 +28,34 @@ def test_put_file_stores_content_and_metadata(tmp_path: Path):
     assert store.exists(stored.uri) is True
 
 
+def test_put_file_reports_creation_and_delete_removes_only_new_stored_file(
+    tmp_path: Path,
+):
+    source = tmp_path / "source.txt"
+    source.write_text("artifact content", encoding="utf-8")
+    store = LocalArtifactStore(tmp_path / "artifacts")
+
+    first = store.put_file(source, relative_dest="imports/content.txt")
+    replay = store.put_file(source, relative_dest="imports/content.txt")
+
+    assert first.created is True
+    assert replay.created is False
+    assert store.delete(first.uri) is True
+    assert store.exists(first.uri) is False
+    assert source.read_text(encoding="utf-8") == "artifact content"
+
+
+def test_delete_rejects_files_outside_artifact_store(tmp_path: Path):
+    source = tmp_path / "source.txt"
+    source.write_text("keep this file", encoding="utf-8")
+    store = LocalArtifactStore(tmp_path / "artifacts")
+
+    with pytest.raises(ValueError):
+        store.delete(source.as_uri())
+
+    assert source.exists()
+
+
 def test_wav_media_type_detection(tmp_path: Path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
@@ -72,7 +100,7 @@ def test_readonly_filesystem_fallback(tmp_path: Path, monkeypatch):
     # Force put_file destination mkdir to fail with Errno 30 (Read-only file system)
     orig_mkdir = Path.mkdir
     def mock_mkdir(self, *args, **kwargs):
-        if "artifacts" in str(self):
+        if self == store.base_dir or store.base_dir in self.parents:
             err = OSError(30, "Read-only file system")
             err.errno = 30
             raise err
@@ -84,6 +112,28 @@ def test_readonly_filesystem_fallback(tmp_path: Path, monkeypatch):
     assert stored.artifact_id is not None
     assert store.exists(stored.uri) is True
     assert Path(store.get_path(stored.uri)).exists()
+
+
+def test_put_file_fails_when_configured_and_fallback_storage_are_unavailable(
+    tmp_path: Path,
+    monkeypatch,
+):
+    source = tmp_path / "source.txt"
+    source.write_text("artifact content", encoding="utf-8")
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    original_mkdir = Path.mkdir
+
+    def fail_storage_mkdir(path, *args, **kwargs):
+        if "artifacts" in str(path) or "conversense_artifacts" in str(path):
+            raise OSError("storage unavailable")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_storage_mkdir)
+
+    with pytest.raises(OSError, match="storage unavailable"):
+        store.put_file(source, relative_dest="imports/source.txt")
+
+    assert source.exists()
 
 
 def test_artifact_reference_registration_keeps_optional_metadata_null(

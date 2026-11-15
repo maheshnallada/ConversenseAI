@@ -11,7 +11,7 @@ from app.domain.envelope import (
     InteractionEvent,
     InteractionStatus,
 )
-from app.storage.artifacts import ArtifactStore, compute_sha256
+from app.storage.artifacts import ArtifactStore, StoredArtifact, compute_sha256
 from app.storage.orm import ArtifactRow
 from app.validation.audio import (
     CallFilesValidationResult,
@@ -64,6 +64,48 @@ def map_call_folder(
     tenant_id: str,
     artifact_store: ArtifactStore,
 ) -> tuple[InteractionEnvelope, list[ArtifactRow], CallFilesValidationResult]:
+    envelope, artifact_rows, validation, _ = _map_call_folder(
+        folder_path,
+        tenant_id,
+        artifact_store,
+        stored_artifacts=None,
+    )
+    return envelope, artifact_rows, validation
+
+
+def map_call_folder_with_artifact_tracking(
+    folder_path: Path | str,
+    tenant_id: str,
+    artifact_store: ArtifactStore,
+    stored_artifacts: list[StoredArtifact] | None = None,
+) -> tuple[
+    InteractionEnvelope,
+    list[ArtifactRow],
+    CallFilesValidationResult,
+    list[StoredArtifact],
+]:
+    if stored_artifacts is None:
+        stored_artifacts = []
+    envelope, artifact_rows, validation, _ = _map_call_folder(
+        folder_path,
+        tenant_id,
+        artifact_store,
+        stored_artifacts=stored_artifacts,
+    )
+    return envelope, artifact_rows, validation, stored_artifacts
+
+
+def _map_call_folder(
+    folder_path: Path | str,
+    tenant_id: str,
+    artifact_store: ArtifactStore,
+    stored_artifacts: list[StoredArtifact] | None,
+) -> tuple[
+    InteractionEnvelope,
+    list[ArtifactRow],
+    CallFilesValidationResult,
+    list[StoredArtifact] | None,
+]:
     folder = Path(folder_path).resolve()
     validation = validate_call_files(folder)
 
@@ -108,6 +150,8 @@ def map_call_folder(
                 f"{relative_path.as_posix()}"
             ),
         )
+        if stored_artifacts is not None:
+            stored_artifacts.append(stored)
 
         validation_status = "valid"
         validation_details: dict[str, Any] = {}
@@ -246,5 +290,5 @@ def map_call_folder(
         evaluation_refs=None,
     )
 
-    return envelope, artifact_rows, validation
+    return envelope, artifact_rows, validation, stored_artifacts
 

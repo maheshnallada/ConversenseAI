@@ -1,6 +1,9 @@
 import pytest
+from sqlalchemy import func, select
 
 from app.ingestion.errors import IdempotencyConflict
+from app.ingestion.service import IngestionService
+from app.storage.orm import InteractionRow, OutboxRow
 from tests.conftest import sample_envelope
 
 
@@ -55,3 +58,20 @@ def test_same_interaction_id_is_allowed_for_another_tenant(service, envelope):
     assert result.created is True
     assert service.get("tenant_002", envelope.interaction_id).use_case == "customer_support"
     assert service.get("tenant_001", envelope.interaction_id).use_case == "health_insurance"
+
+
+def test_ingest_in_session_adds_rows_without_committing(
+    session_factory,
+    envelope,
+):
+    service = IngestionService(session_factory)
+
+    with session_factory() as session:
+        result = service.ingest_in_session(session, envelope)
+
+        assert result.created is True
+        assert session.scalar(select(func.count()).select_from(InteractionRow)) == 1
+        assert session.scalar(select(func.count()).select_from(OutboxRow)) == 1
+        session.rollback()
+
+    assert service.get(envelope.tenant_id, envelope.interaction_id) is None

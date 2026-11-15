@@ -1,18 +1,10 @@
-import json
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
-from sqlalchemy import select
-
-from app.ingestion.mapper import map_call_folder
-from app.ingestion.service import IngestionService
-from app.reconstruction.processor import TranscriptProcessor
+from app.ingestion.call_importer import CallFolderImporter
 from app.storage.artifacts import ArtifactStore
-from app.storage.orm import ArtifactRow, ImportRunRow
-from app.storage.transcript_repo import TranscriptRepository
 
 
 @dataclass
@@ -56,9 +48,7 @@ class BatchImporter:
         self.session_factory = session_factory
         self.artifact_store = artifact_store
         self.tenant_id = tenant_id
-        self.service = IngestionService(session_factory)
-        self.turn_processor = TranscriptProcessor()
-        self.turn_repo = TranscriptRepository(session_factory)
+        self.call_importer = CallFolderImporter(session_factory, artifact_store)
 
     def import_directory(
         self,
@@ -92,72 +82,39 @@ class BatchImporter:
         for folder in call_folders:
             summary = CallImportSummary(folder=folder.name)
             try:
-                envelope, artifact_rows, validation = map_call_folder(
-                    folder_path=folder,
-                    tenant_id=self.tenant_id,
-                    artifact_store=self.artifact_store,
-                )
+                call_result = self.call_importer.import_call(folder, self.tenant_id)
+                summary.call_id = call_result.interaction_id
+                summary.status = call_result.status
+                summary.files_count = call_result.files_count
+                summary.has_agent_manifest = call_result.has_agent_manifest
+                summary.phone_answered = call_result.phone_answered
+                summary.validation_errors = call_result.validation_errors
+                summary.error = call_result.error
 
-                summary.call_id = envelope.interaction_id
-                summary.status = envelope.status
-                summary.files_count = len(artifact_rows)
-                summary.has_agent_manifest = validation.has_agent_manifest
-                summary.phone_answered = validation.phone_answered
-                summary.validation_errors = validation.errors
-
-                if not validation.has_agent_manifest:
+                if not call_result.has_agent_manifest:
                     calls_without_agent_manifest.append(folder.name)
 
-                # Check if recording was silent
-                is_silent = any(
-                    a.artifact_type == "recording" and a.validation_status == "silent"
-                    for a in artifact_rows
-                )
+                is_silent = call_result.audio_validation.is_silent
                 summary.is_silent = is_silent
                 if is_silent:
                     calls_silent.append(folder.name)
 
-                # Ingest canonical interaction envelope
-                ingest_res = self.service.ingest(envelope)
-                summary.created = ingest_res.created
-
-                if ingest_res.created:
+                if call_result.status == "created":
+                    summary.created = True
                     newly_created += 1
-                else:
+                    successful_calls += 1
+                    total_artifacts += call_result.files_count
+                elif call_result.status == "replayed":
                     replayed += 1
-
-                # Normalize and persist transcript turns
-                turns = self.turn_processor.process_folder(
-                    call_folder=folder,
-                    tenant_id=self.tenant_id,
-                )
-                if turns:
-                    self.turn_repo.save_turns(
-                        tenant_id=self.tenant_id,
-                        interaction_id=envelope.interaction_id,
-                        turns=turns,
-                    )
-
-                # Persist ArtifactRows idempotently
-                with self.session_factory() as session:
-                    for art in artifact_rows:
-                        existing = session.scalar(
-                            select(ArtifactRow).where(
-                                ArtifactRow.tenant_id == art.tenant_id,
-                                ArtifactRow.interaction_id == art.interaction_id,
-                                ArtifactRow.artifact_id == art.artifact_id,
-                            )
-                        )
-                        if existing is None:
-                            session.add(art)
-                    session.commit()
-
-                total_artifacts += len(artifact_rows)
-                successful_calls += 1
+                    successful_calls += 1
+                    total_artifacts += call_result.files_count
+                else:
+                    failed_calls += 1
 
             except Exception as exc:
                 failed_calls += 1
                 summary.error = str(exc)
+                summary.status = "failed"
 
             summaries.append(summary)
 
@@ -178,35 +135,5 @@ class BatchImporter:
             completed_at=completed_at,
             call_summaries=summaries,
         )
-
-        # Record import run row
-        with self.session_factory() as session:
-            run_summary = {
-                "run_id": run_id,
-                "tenant_id": self.tenant_id,
-                "total_calls": len(call_folders),
-                "successful_calls": successful_calls,
-                "failed_calls": failed_calls,
-                "newly_created": newly_created,
-                "replayed": replayed,
-                "calls_without_agent_manifest": calls_without_agent_manifest,
-                "calls_silent": calls_silent,
-                "total_artifacts": total_artifacts,
-                "duration_seconds": (completed_at - started_at).total_seconds(),
-            }
-            session.add(
-                ImportRunRow(
-                    run_id=run_id,
-                    tenant_id=self.tenant_id,
-                    total_calls=len(call_folders),
-                    successful_calls=successful_calls,
-                    failed_calls=failed_calls,
-                    summary_json=json.dumps(run_summary),
-                    started_at=started_at,
-                    completed_at=completed_at,
-                )
-            )
-            session.commit()
-
         return result
 
