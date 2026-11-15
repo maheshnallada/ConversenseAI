@@ -1,3 +1,4 @@
+﻿from pathlib import Path
 import csv
 import hashlib
 import json
@@ -15,7 +16,6 @@ from app.domain.golden import (
 from app.domain.transcript import TranscriptTurn
 from app.evaluation.schemas import ConversationStatus
 from app.reconstruction.processor import TranscriptProcessor
-
 
 REQUIRED_HEADERS = {
     "call_id",
@@ -72,11 +72,19 @@ def _load_jsonl(raw_value: Any) -> dict[str, Any]:
         line_text = line.strip()
         if not line_text:
             continue
-        item = json.loads(line_text)
+        try:
+            item = json.loads(line_text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Malformed manifest JSON: {exc}") from exc
         if isinstance(item, dict):
             turn_key = str(item.get("turn"))
             manifest[turn_key] = item
     return manifest
+
+
+def _validate_csv_row_structure(row: dict[str, Any] | None, row_number: int) -> None:
+    if row is None or None in row or any(value is None for value in row.values()):
+        raise ValueError(f"Malformed CSV row structure at row {row_number}: missing or extra fields.")
 
 
 def _build_envelope(call_id: str, tenant_id: str, call_data: dict[str, Any]) -> InteractionEnvelope:
@@ -146,6 +154,7 @@ def load_golden_dataset(csv_path: Path | str, tenant_id: str = "tenant_default")
             seen_call_ids: set[str] = set()
             records: list[GoldenDatasetRecord] = []
             for row in reader:
+                _validate_csv_row_structure(row, reader.line_num)
                 raw_call_id = str(row.get("call_id") or "").strip()
                 if raw_call_id:
                     if raw_call_id in seen_call_ids:
@@ -184,23 +193,11 @@ def load_golden_dataset(csv_path: Path | str, tenant_id: str = "tenant_default")
                     model_input = json.loads(raw_input)
                     if not isinstance(model_input, dict):
                         raise TypeError("model input must decode to an object")
-                except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                    record.error = f"Malformed model input JSON: {exc}"
-                    records.append(record)
-                    continue
-
-                user_manifest = _load_jsonl(row.get("manifest_jsonl"))
-                agent_manifest = _load_jsonl(row.get("agent_manifest_jsonl"))
-                try:
+                    user_manifest = _load_jsonl(row.get("manifest_jsonl"))
+                    agent_manifest = _load_jsonl(row.get("agent_manifest_jsonl"))
                     embedded_call_id = str(model_input.get("call_id") or "").strip()
-                    if embedded_call_id and raw_call_id and embedded_call_id != raw_call_id:
-                        outer_is_call = raw_call_id.lower().startswith("call_")
-                        embedded_is_call = embedded_call_id.lower().startswith("call_")
-                        if outer_is_call or embedded_is_call:
-                            if not (outer_is_call and embedded_is_call):
-                                pass
-                            else:
-                                raise ValueError(f"Embedded call_id {embedded_call_id!r} does not match outer call_id {raw_call_id!r}.")
+                    if raw_call_id and embedded_call_id and embedded_call_id != raw_call_id:
+                        raise ValueError(f"Embedded call_id {embedded_call_id!r} does not match outer call_id {raw_call_id!r}.")
                     if not embedded_call_id and raw_call_id:
                         model_input["call_id"] = raw_call_id
                     input_hash = _make_input_hash(model_input, user_manifest, agent_manifest)
@@ -210,7 +207,7 @@ def load_golden_dataset(csv_path: Path | str, tenant_id: str = "tenant_default")
                     interaction.events = _build_events(interaction.interaction_id, model_input)
                     turns = TranscriptProcessor().process_call_data(model_input, tenant_id, user_manifest, agent_manifest)
                     record.evaluation_input = GoldenEvaluationInput(interaction=interaction, turns=turns)
-                except (TypeError, ValueError) as exc:
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
                     record.error = str(exc)
 
                 records.append(record)

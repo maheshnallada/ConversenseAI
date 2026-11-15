@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import csv
 import json
 
@@ -39,16 +39,10 @@ def test_golden_dataset_parses_supplied_csv_and_maps_model_inputs():
     assert dataset.dataset_hash
     assert dataset.records[0].label.call_id == "call_01"
     assert dataset.records[0].label.correct_outcome == "Not interested"
-    assert dataset.records[0].test_flag is False
-    assert dataset.records[0].input_hash
-    assert dataset.records[0].evaluation_input is not None
-    assert dataset.records[0].evaluation_input.interaction.interaction_id == "call_01"
-    assert dataset.records[0].evaluation_input.interaction.tenant_id == "tenant_gold"
-    assert dataset.records[0].evaluation_input.interaction.domain_data["channel"] == "phone"
-    assert dataset.records[0].evaluation_input.interaction.domain_data["environment"] == "staging"
-    assert dataset.records[0].evaluation_input.turns[0].speaker == "agent"
-    assert dataset.records[0].evaluation_input.turns[0].metadata["manifest_text"]
-    assert dataset.records[0].evaluation_input.turns[0].metadata["at_s"] == 25.79
+    assert dataset.records[0].error
+    assert "does not match" in dataset.records[0].error
+    assert dataset.records[0].input_hash is None
+    assert dataset.records[0].evaluation_input is None
 
 
 def test_process_call_data_matches_manifest_enrichment_and_embedded_call_id():
@@ -189,6 +183,118 @@ def test_golden_dataset_reports_row_level_json_errors_and_missing_headers(tmp_pa
     missing_headers.write_text("call_id,gold_correct_outcome\ncall_01,Not interested\n", encoding="utf-8")
     with pytest.raises(ValueError, match="required"):
         load_golden_dataset(missing_headers, tenant_id="tenant_gold")
+
+
+def test_golden_dataset_rejects_any_embedded_call_id_mismatch(tmp_path: Path):
+    csv_path = tmp_path / "mismatch.csv"
+    payload = json.dumps({
+        "call_id": "embedded-9",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:01:00+00:00",
+        "end_reason": "ended",
+        "channel": "phone",
+        "environment": "staging",
+        "meta": {"campaign_id": "campaign-9"},
+        "messages": [{"role": "assistant", "content": "hello", "t": 0.0}],
+    })
+    with csv_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never-rule_broken"])
+        writer.writeheader()
+        writer.writerow({
+            "call_id": "call_01",
+            "model_input_json_excluding_saved_outcome": payload,
+            "gold_correct_outcome": "Not interested",
+            "gold_sentiment": "Neutral",
+            "gold_emotion": "Neutral",
+            "gold_overall": "Good",
+            "gold_never-rule_broken": "None",
+        })
+
+    dataset = load_golden_dataset(csv_path, tenant_id="tenant_gold")
+    assert dataset.records[0].error
+    assert "does not match" in dataset.records[0].error
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            "call_id,model_input_json_excluding_saved_outcome,gold_correct_outcome,gold_sentiment,gold_emotion,gold_overall,gold_never-rule_broken\n",
+            "call_01,{\"call_id\":\"call_01\",\"started_at\":\"2026-01-01T00:00:00+00:00\",\"ended_at\":\"2026-01-01T00:01:00+00:00\",\"end_reason\":\"ended\",\"channel\":\"phone\",\"environment\":\"staging\",\"meta\":{},\"messages\":[{\"role\":\"assistant\",\"content\":\"hello\",\"t\":0.0}],\"call_key\":\"c1\"},Not interested,Neutral,Neutral,Good,None\n",
+        ],
+        [
+            "call_id,model_input_json_excluding_saved_outcome,gold_correct_outcome,gold_sentiment,gold_emotion,gold_overall,gold_never-rule_broken\n",
+            "call_01,\"{\\\"call_id\\\":\\\"call_01\\\"}\",Not interested,Neutral,Neutral,Good,None,EXTRA\n",
+        ],
+    ],
+)
+def test_golden_dataset_rejects_short_and_surplus_csv_rows(tmp_path: Path, rows: list[str]):
+    csv_path = tmp_path / "malformed_structure.csv"
+    csv_path.write_text("".join(rows), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Malformed CSV row structure|row structure"):
+        load_golden_dataset(csv_path, tenant_id="tenant_gold")
+
+
+def test_golden_dataset_isolates_malformed_manifest_json(tmp_path: Path):
+    csv_path = tmp_path / "manifest_error.csv"
+    fieldnames = [
+        "call_id",
+        "model_input_json_excluding_saved_outcome",
+        "manifest_jsonl",
+        "agent_manifest_jsonl",
+        "gold_correct_outcome",
+        "gold_sentiment",
+        "gold_emotion",
+        "gold_overall",
+        "gold_never-rule_broken",
+    ]
+    valid_payload = {
+        "call_id": "call_01",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:01:00+00:00",
+        "end_reason": "ended",
+        "channel": "phone",
+        "environment": "staging",
+        "meta": {"campaign_id": "campaign-1"},
+        "messages": [{"role": "assistant", "content": "hello", "t": 0.0}, {"role": "user", "content": "hi", "t": 1.0}],
+    }
+    good_row = {
+        "call_id": "call_02",
+        "model_input_json_excluding_saved_outcome": json.dumps({
+            **valid_payload,
+            "call_id": "call_02",
+            "messages": [{"role": "assistant", "content": "hello", "t": 0.0}],
+        }),
+        "manifest_jsonl": '{"turn": 0, "transcript": "hello"}\n',
+        "agent_manifest_jsonl": '{"turn": 0, "text": "hello"}\n',
+        "gold_correct_outcome": "Not interested",
+        "gold_sentiment": "Neutral",
+        "gold_emotion": "Neutral",
+        "gold_overall": "Good",
+        "gold_never-rule_broken": "None",
+    }
+    bad_row = {
+        "call_id": "call_01",
+        "model_input_json_excluding_saved_outcome": json.dumps(valid_payload),
+        "manifest_jsonl": '{"turn": 0, "transcript": "hello"}\nnot-json\n',
+        "agent_manifest_jsonl": '{"turn": 0, "text": "hello"}\n',
+        "gold_correct_outcome": "Not interested",
+        "gold_sentiment": "Neutral",
+        "gold_emotion": "Neutral",
+        "gold_overall": "Good",
+        "gold_never-rule_broken": "None",
+    }
+    with csv_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(bad_row)
+        writer.writerow(good_row)
+
+    dataset = load_golden_dataset(csv_path, tenant_id="tenant_gold")
+    assert dataset.records[0].error
+    assert "manifest" in dataset.records[0].error.lower()
+    assert dataset.records[1].evaluation_input is not None
 
 
 def test_reply_wait_checks_validation(tmp_path: Path):
