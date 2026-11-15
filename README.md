@@ -59,7 +59,40 @@ Invoke-RestMethod -Method Post `
   -Headers $headers -ContentType "application/json" -Body $turn
 ```
 
-Use `GET /api/v1/interactions` for paginated interaction search and filtering, and register optional review-artifact metadata at `/api/v1/interactions/{interaction_id}/artifacts`. The API does not accept call-folder paths or ZIP uploads.
+Use `GET /api/v1/interactions` for paginated interaction search and filtering, and register optional review-artifact metadata at `/api/v1/interactions/{interaction_id}/artifacts`.
+
+### Import calls from the dashboard
+
+Open the dashboard at `/dashboard` and select **Import Calls**. Choose **Single
+call** or **Folder batch**, then select a source:
+
+- **Upload from computer** opens a directory picker. Choose one call folder or
+  a parent folder whose immediate child folders are calls.
+- **Staged backend calls** lists call folders already present beneath the
+  configured artifact root for the current tenant. Select one or more folders
+  to import them.
+
+Each call folder must contain `call.json` and `recording.wav` at its root.
+Other regular files, including nested files, are preserved as local artifacts.
+The stable `call_id` in `call.json` identifies the call; folder names are
+display-only. Each call is validated and imported independently, and the view
+shows per-call outcomes. Identical content is replayed safely; changed content
+for an existing `call_id` is reported as a conflict and never overwrites the
+existing call.
+
+Imported files remain in the configured local artifact store; this workflow
+does not upload them to object storage. Importing only saves the call and does
+not run evaluation. Evaluation remains a separate, manual action.
+
+The upload API accepts multipart files with relative folder names at
+`POST /api/v1/imports/upload-calls`. Staged calls can be listed with
+`GET /api/v1/imports/staged-calls` and imported by their server-generated
+folder IDs with `POST /api/v1/imports/staged-calls`. These APIs do not accept
+arbitrary server filesystem paths or ZIP uploads.
+
+Import limits are 100 calls per request, 200 files per call, 10,000 files per
+request, 512 MiB per file, and 5 GiB total per request. Staged imports follow
+the same file and request limits.
 
 ## Evaluation workflow
 
