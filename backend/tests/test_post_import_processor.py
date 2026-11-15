@@ -1,5 +1,8 @@
 import json
+import threading
+import time
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,6 +11,7 @@ from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.domain.transcript import TranscriptTurn
 from app.evaluation.service import EvaluationService
 from app.ingestion.post_import_processor import PostImportProcessor
+from app.storage.db import create_session_factory, init_db
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.observability_repo import ObservabilityRepository
 from app.storage.timeline_repo import TimelineRepository
@@ -179,6 +183,106 @@ def test_replay_fills_missing_outputs_without_duplicating_existing_evaluation(
     assert calls == []
 
 
+def test_golden_run_does_not_satisfy_imported_call_evaluation(
+    tmp_path: Path,
+    session_factory,
+    monkeypatch,
+):
+    folder = create_call_folder(tmp_path / "golden-replay")
+    _, envelope, turns, validation = imported_call(folder, [])
+    repository = EvaluationRepository(session_factory)
+    golden_run = make_run("completed", "golden-run")
+    golden_run.evaluation_namespace = "golden"
+    golden_run.batches[0].evaluation_namespace = "golden"
+    repository.save_run(golden_run)
+    evaluated: list[str] = []
+
+    def evaluate(self, tenant_id, interaction_id, retry_from_run_id=None):
+        evaluated.append(interaction_id)
+        run = make_run("completed", "interaction-run")
+        self.eval_repo.save_run(run)
+        return run
+
+    monkeypatch.setattr(EvaluationService, "evaluate_interaction", evaluate)
+
+    result = PostImportProcessor(session_factory).process_imported_call(
+        folder,
+        envelope,
+        turns,
+        validation,
+    )
+
+    assert result.evaluation_run_id == "interaction-run"
+    assert evaluated == ["processor-call"]
+    assert repository.get_latest_run(
+        "tenant-a",
+        "processor-call",
+        evaluation_namespace="golden",
+    ).run_id == "golden-run"
+
+
+def test_concurrent_replays_share_one_run_across_processors(
+    tmp_path: Path,
+    monkeypatch,
+):
+    database_path = tmp_path / "concurrent.sqlite"
+    session_factory = create_session_factory(
+        f"sqlite:///{database_path}",
+        connect_args={"check_same_thread": False},
+    )
+    init_db(session_factory)
+    folder = create_call_folder(tmp_path / "concurrent-call")
+    _, envelope, turns, validation = imported_call(folder, [])
+    monkeypatch.setattr(
+        TimelineRepository,
+        "get_timeline",
+        lambda self, tenant_id, interaction_id: object(),
+    )
+    monkeypatch.setattr(
+        ObservabilityRepository,
+        "get_metrics",
+        lambda self, tenant_id, interaction_id: object(),
+    )
+    processors = [
+        PostImportProcessor(session_factory),
+        PostImportProcessor(session_factory),
+    ]
+    calls = []
+    calls_lock = threading.Lock()
+    save_lock = threading.Lock()
+
+    def evaluate(self, tenant_id, interaction_id, retry_from_run_id=None):
+        with calls_lock:
+            calls.append(interaction_id)
+            run_id = f"concurrent-run-{len(calls)}"
+        time.sleep(0.2)
+        run = make_run("completed", run_id)
+        with save_lock:
+            self.eval_repo.save_run(run)
+        return run
+
+    monkeypatch.setattr(EvaluationService, "evaluate_interaction", evaluate)
+    start = threading.Barrier(3)
+
+    def process(processor):
+        start.wait(timeout=3)
+        return processor.process_imported_call(
+            folder,
+            envelope,
+            turns,
+            validation,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(process, processor) for processor in processors]
+        start.wait(timeout=3)
+        results = [future.result(timeout=5) for future in futures]
+
+    assert len(calls) == 1
+    assert results[0].evaluation_run_id == results[1].evaluation_run_id
+    assert results[0].evaluation_status == results[1].evaluation_status == "ready"
+
+
 def test_failed_evaluation_batch_returns_failed_status_and_run_id(
     tmp_path: Path,
     session_factory,
@@ -301,3 +405,43 @@ def test_evaluation_exception_is_reported_without_exposing_folder_path(
     assert result.evaluation_run_id is None
     assert [error.stage for error in result.errors] == ["evaluation"]
     assert str(folder) not in result.errors[0].message
+
+
+def test_evaluation_guard_releases_after_failure_for_later_retry(
+    tmp_path: Path,
+    session_factory,
+    monkeypatch,
+):
+    folder = create_call_folder(tmp_path / "evaluation-retry")
+    _, envelope, turns, validation = imported_call(folder, [])
+    attempts = 0
+
+    def evaluate(self, tenant_id, interaction_id, retry_from_run_id=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("evaluation unavailable")
+        run = make_run("completed", "retried-run")
+        self.eval_repo.save_run(run)
+        return run
+
+    monkeypatch.setattr(EvaluationService, "evaluate_interaction", evaluate)
+    processor = PostImportProcessor(session_factory)
+
+    first_result = processor.process_imported_call(
+        folder,
+        envelope,
+        turns,
+        validation,
+    )
+    retry_result = processor.process_imported_call(
+        folder,
+        envelope,
+        turns,
+        validation,
+    )
+
+    assert first_result.evaluation_status == "failed"
+    assert retry_result.evaluation_status == "ready"
+    assert retry_result.evaluation_run_id == "retried-run"
+    assert attempts == 2

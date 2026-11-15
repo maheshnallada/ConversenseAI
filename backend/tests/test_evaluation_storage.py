@@ -59,7 +59,11 @@ def test_archived_evaluation_table_is_unmapped_and_left_intact():
     assert row_count == 1
 
 
-def _sample_batch(evaluation_id, batch_name="conversation_understanding"):
+def _sample_batch(
+    evaluation_id,
+    batch_name="conversation_understanding",
+    evaluation_namespace="interaction",
+):
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
@@ -84,10 +88,16 @@ def _sample_batch(evaluation_id, batch_name="conversation_understanding"):
         review_required=False,
         review_status="not_required",
         review_reasons=[],
+        evaluation_namespace=evaluation_namespace,
     )
 
 
-def _sample_run(run_id, evaluation_id, interaction_id="call_batched"):
+def _sample_run(
+    run_id,
+    evaluation_id,
+    interaction_id="call_batched",
+    evaluation_namespace="interaction",
+):
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
@@ -95,12 +105,18 @@ def _sample_run(run_id, evaluation_id, interaction_id="call_batched"):
         run_id=run_id,
         tenant_id="tenant_eval",
         interaction_id=interaction_id,
-        batches=[_sample_batch(evaluation_id)],
+        batches=[
+            _sample_batch(
+                evaluation_id,
+                evaluation_namespace=evaluation_namespace,
+            )
+        ],
         summary={"overall_assessment": "Good"},
         started_at=now,
         completed_at=now,
         review_required=False,
         review_reasons=[],
+        evaluation_namespace=evaluation_namespace,
     )
 
 
@@ -164,6 +180,92 @@ def test_distinct_runs_preserve_batch_provenance_for_retries():
     assert loaded_original is not None
     assert loaded_retry.batches[0].source_evaluation_id == "batch-original"
     assert loaded_original.batches[0].source_evaluation_id is None
+
+
+def test_evaluation_namespace_scopes_run_and_batch_round_trips():
+    repo = EvaluationRepository(_factory())
+    repo.save_run(_sample_run("interaction-run", "interaction-batch"))
+    repo.save_run(
+        _sample_run(
+            "golden-run",
+            "golden-batch",
+            evaluation_namespace="golden",
+        )
+    )
+
+    latest_interaction = repo.get_latest_run("tenant_eval", "call_batched")
+    latest_golden = repo.get_latest_run(
+        "tenant_eval",
+        "call_batched",
+        evaluation_namespace="golden",
+    )
+
+    assert latest_interaction is not None
+    assert latest_interaction.run_id == "interaction-run"
+    assert latest_interaction.evaluation_namespace == "interaction"
+    assert latest_interaction.batches[0].evaluation_namespace == "interaction"
+    assert latest_golden is not None
+    assert latest_golden.run_id == "golden-run"
+    assert latest_golden.evaluation_namespace == "golden"
+    assert latest_golden.batches[0].evaluation_namespace == "golden"
+    assert repo.get_run("tenant_eval", "call_batched", "golden-run") is None
+    assert (
+        repo.get_run(
+            "tenant_eval",
+            "call_batched",
+            "golden-run",
+            evaluation_namespace="golden",
+        ).run_id
+        == "golden-run"
+    )
+
+
+def test_init_db_migrates_existing_evaluations_to_interaction_namespace():
+    factory = create_session_factory(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    with factory.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE evaluation_runs "
+                "(id INTEGER PRIMARY KEY, run_id TEXT)"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO evaluation_runs (run_id) VALUES ('old-run')")
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE evaluation_batches "
+                "(id INTEGER PRIMARY KEY, evaluation_id TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO evaluation_batches (evaluation_id) "
+                "VALUES ('old-batch')"
+            )
+        )
+
+    init_db(factory)
+
+    with factory.kw["bind"].connect() as connection:
+        run_namespace = connection.scalar(
+            text(
+                "SELECT evaluation_namespace FROM evaluation_runs "
+                "WHERE run_id = 'old-run'"
+            )
+        )
+        batch_namespace = connection.scalar(
+            text(
+                "SELECT evaluation_namespace FROM evaluation_batches "
+                "WHERE evaluation_id = 'old-batch'"
+            )
+        )
+    assert run_namespace == "interaction"
+    assert batch_namespace == "interaction"
 
 
 def test_service_retry_only_reruns_failed_batches_and_carries_successes():

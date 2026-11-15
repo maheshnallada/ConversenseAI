@@ -16,6 +16,16 @@ def init_db(session_factory) -> None:
     Base.metadata.create_all(engine)
 
     additions = {
+        "evaluation_runs": {
+            "evaluation_namespace": (
+                "VARCHAR(64) NOT NULL DEFAULT 'interaction'"
+            ),
+        },
+        "evaluation_batches": {
+            "evaluation_namespace": (
+                "VARCHAR(64) NOT NULL DEFAULT 'interaction'"
+            ),
+        },
         "golden_dataset_labels": {
             "conversation_status": "VARCHAR(64)",
             "language_slice": "VARCHAR(64)",

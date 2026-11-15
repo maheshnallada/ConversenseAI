@@ -24,6 +24,7 @@ class EvaluationBatchRecord:
     source_evaluation_id: str | None = None
     error_type: str | None = None
     error_message: str | None = None
+    evaluation_namespace: str = "interaction"
 
 
 @dataclass
@@ -37,4 +38,5 @@ class EvaluationRun:
     completed_at: datetime | None
     review_required: bool
     review_reasons: list[str]
+    evaluation_namespace: str = "interaction"
 

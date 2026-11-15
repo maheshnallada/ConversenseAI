@@ -21,6 +21,7 @@ class EvaluationRepository:
                     run_id=run.run_id,
                     tenant_id=run.tenant_id,
                     interaction_id=run.interaction_id,
+                    evaluation_namespace=run.evaluation_namespace,
                     summary_json=json.dumps(
                         run.summary,
                         default=lambda value: (
@@ -42,6 +43,7 @@ class EvaluationRepository:
                         run_id=run.run_id,
                         tenant_id=run.tenant_id,
                         interaction_id=run.interaction_id,
+                        evaluation_namespace=run.evaluation_namespace,
                         batch_name=batch.batch_name,
                         status=batch.status,
                         model=batch.model,
@@ -76,9 +78,11 @@ class EvaluationRepository:
             run_id=row.run_id,
             tenant_id=row.tenant_id,
             interaction_id=row.interaction_id,
+            evaluation_namespace=row.evaluation_namespace,
             batches=[
                 EvaluationBatchRecord(
                     evaluation_id=batch.evaluation_id,
+                    evaluation_namespace=batch.evaluation_namespace,
                     batch_name=batch.batch_name,
                     status=batch.status,
                     model=batch.model,
@@ -116,6 +120,7 @@ class EvaluationRepository:
         tenant_id: str,
         interaction_id: str,
         run_id: str,
+        evaluation_namespace: str = "interaction",
     ) -> EvaluationRun | None:
         with self.session_factory() as session:
             row = session.scalar(
@@ -123,6 +128,7 @@ class EvaluationRepository:
                     EvaluationRunRow.tenant_id == tenant_id,
                     EvaluationRunRow.interaction_id == interaction_id,
                     EvaluationRunRow.run_id == run_id,
+                    EvaluationRunRow.evaluation_namespace == evaluation_namespace,
                 )
             )
             if row is None:
@@ -133,6 +139,7 @@ class EvaluationRepository:
                     EvaluationBatchRow.tenant_id == tenant_id,
                     EvaluationBatchRow.interaction_id == interaction_id,
                     EvaluationBatchRow.run_id == run_id,
+                    EvaluationBatchRow.evaluation_namespace == evaluation_namespace,
                 )
                 .order_by(EvaluationBatchRow.batch_name)
             ).all()
@@ -142,6 +149,7 @@ class EvaluationRepository:
         self,
         tenant_id: str,
         interaction_id: str,
+        evaluation_namespace: str = "interaction",
     ) -> EvaluationRun | None:
         with self.session_factory() as session:
             row = session.scalar(
@@ -149,6 +157,7 @@ class EvaluationRepository:
                 .where(
                     EvaluationRunRow.tenant_id == tenant_id,
                     EvaluationRunRow.interaction_id == interaction_id,
+                    EvaluationRunRow.evaluation_namespace == evaluation_namespace,
                 )
                 .order_by(
                     desc(EvaluationRunRow.started_at),
@@ -164,6 +173,7 @@ class EvaluationRepository:
                     EvaluationBatchRow.tenant_id == tenant_id,
                     EvaluationBatchRow.interaction_id == interaction_id,
                     EvaluationBatchRow.run_id == row.run_id,
+                    EvaluationBatchRow.evaluation_namespace == evaluation_namespace,
                 )
                 .order_by(EvaluationBatchRow.batch_name)
             ).all()

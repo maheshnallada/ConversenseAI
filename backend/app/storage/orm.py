@@ -214,6 +214,11 @@ class EvaluationRunRow(Base):
     run_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluation_namespace: Mapped[str] = mapped_column(
+        String(64),
+        default="interaction",
+        server_default="interaction",
+    )
     summary_json: Mapped[str] = mapped_column(Text)
     review_required: Mapped[bool] = mapped_column(Boolean)
     review_reasons_json: Mapped[str] = mapped_column(Text)
@@ -239,6 +244,11 @@ class EvaluationBatchRow(Base):
     run_id: Mapped[str] = mapped_column(String(128), index=True)
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluation_namespace: Mapped[str] = mapped_column(
+        String(64),
+        default="interaction",
+        server_default="interaction",
+    )
     batch_name: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), index=True)
     model: Mapped[str] = mapped_column(String(128))

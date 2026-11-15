@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -15,6 +16,15 @@ from app.storage.timeline_repo import TimelineRepository
 from app.validation.audio import CallFilesValidationResult, validate_wav
 
 logger = logging.getLogger(__name__)
+
+_EVALUATION_GUARD_STRIPES = tuple(threading.Lock() for _ in range(64))
+
+
+def _evaluation_guard(tenant_id: str, interaction_id: str) -> threading.Lock:
+    return _EVALUATION_GUARD_STRIPES[
+        hash((tenant_id, interaction_id)) % len(_EVALUATION_GUARD_STRIPES)
+    ]
+
 
 ProcessingStage = Literal["timeline", "observability", "evaluation"]
 ProcessingStatus = Literal["ready", "failed"]
@@ -115,15 +125,20 @@ class PostImportProcessor:
         evaluation_run_id: str | None = None
         evaluation_status: ProcessingStatus = "ready"
         try:
-            run = self._evaluation_repository.get_latest_run(
+            with _evaluation_guard(
                 envelope.tenant_id,
                 envelope.interaction_id,
-            )
-            if run is None:
-                run = self._evaluation_service.evaluate_interaction(
+            ):
+                run = self._evaluation_repository.get_latest_run(
                     envelope.tenant_id,
                     envelope.interaction_id,
+                    evaluation_namespace="interaction",
                 )
+                if run is None:
+                    run = self._evaluation_service.evaluate_interaction(
+                        envelope.tenant_id,
+                        envelope.interaction_id,
+                    )
             evaluation_run_id = run.run_id
             if any(batch.status == "failed" for batch in run.batches):
                 evaluation_status = "failed"
