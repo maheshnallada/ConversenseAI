@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 backend_path = Path(__file__).resolve().parent.parent / "backend"
@@ -11,7 +12,6 @@ from app.domain.evaluation import EvaluationRun
 from app.domain.golden import GoldenCallLabel
 from app.storage.db import create_session_factory, init_db
 from app.storage.evaluation_repo import EvaluationRepository
-from app.storage.golden_repo import GoldenDatasetRepository
 from app.validation.benchmark import BenchmarkEngine
 from app.validation.golden_loader import load_golden_dataset
 
@@ -90,12 +90,6 @@ def main():
         description="Conversense AI golden dataset benchmark validator"
     )
     parser.add_argument(
-        "--golden-csv",
-        type=str,
-        default=str(Path(__file__).resolve().parent.parent / "data" / "golden_dataset.csv"),
-        help="Path to golden dataset CSV",
-    )
-    parser.add_argument(
         "--tenant-id",
         type=str,
         default=os.getenv("TENANT_ID", "health_campaign"),
@@ -111,16 +105,28 @@ def main():
 
     factory = create_session_factory(args.db_url)
     init_db(factory)
-    labels = load_golden_dataset(args.golden_csv)
-    GoldenDatasetRepository(factory).save_many(labels)
+    csv_path = (
+        Path(__file__).resolve().parent.parent
+        / "Conversense_AI_25_Records_Input_and_Golden.csv"
+    )
+    dataset = load_golden_dataset(csv_path, tenant_id=args.tenant_id)
+    records = [record for record in dataset.records if record.test_flag is not True]
+    labels = [
+        replace(record.label, conversation_status=None, language_slice=None)
+        for record in records
+    ]
 
     evaluation_repo = EvaluationRepository(factory)
     runs_by_call = {}
-    for label in labels:
-        interaction_id = label.interaction_id or label.call_id
-        runs_by_call[label.call_id] = evaluation_repo.get_latest_run(
-            args.tenant_id, interaction_id
-        )
+    for record in records:
+        run = None
+        if record.input_hash is not None and record.error is None:
+            run = evaluation_repo.get_latest_run(
+                args.tenant_id,
+                record.label.call_id,
+                evaluation_namespace=f"golden_dataset:{record.input_hash}",
+            )
+        runs_by_call[record.label.call_id] = run
 
     report = BenchmarkEngine().evaluate_benchmark(labels, runs_by_call)
     reconciliation_rows = build_reconciliation_rows(labels, runs_by_call)

@@ -1,32 +1,27 @@
 # Golden dataset format
 
-The benchmark compares explicit human labels with the latest persisted evaluation run for each interaction. Import labels from UTF-8 or UTF-8-with-BOM CSV.
+The benchmark compares explicit human labels with versioned evaluations of the supplied dataset's outcome-free model input. The source file, `Conversense_AI_25_Records_Input_and_Golden.csv`, is user-provided data and is not bundled or tracked in this repository. Provision it at the repository root with that exact filename before importing or generating a report.
 
 ## Columns
 
-The loader reads these existing columns:
+The loader reads these supplied dataset columns:
 
 | CSV column | Use |
 |---|---|
-| `Call` | Call or interaction identifier used to find the stored run. |
-| `Correct outcome` | Ground-truth outcome label. |
-| `Sentiment` | Ground-truth sentiment label. |
-| `Emotion` | Ground-truth emotion label. |
-| `Overall` | Ground-truth overall-quality label. |
-| `Never-rule broken` | Use `None` when no never-rule was broken; any other non-empty value marks a violation for aggregate compliance metrics. |
-| `What happened` | Human reference text; it is not inferred into a benchmark dimension. |
-| `Facts the customer gave` | Human reference text; it is not currently a benchmark dimension. |
-| `First thing wrong: line` | Optional transcript line reference for human review. |
-| `First thing wrong: what` | Optional human-review note. |
+| `call_id` | Unique source record and benchmark interaction identifier. |
+| `model_input_json_excluding_saved_outcome` | Canonical model input containing the interaction and transcript. This is the only input used for evaluation. |
+| `gold_correct_outcome` | Ground-truth outcome label. |
+| `gold_sentiment` | Ground-truth sentiment label. |
+| `gold_emotion` | Ground-truth emotion label. |
+| `gold_overall` | Ground-truth overall-quality label. |
+| `gold_never-rule_broken` | Use `None` when no never-rule was broken; any other non-empty value marks a violation for aggregate compliance metrics. |
+| `gold_test_flag` | Exclude a record only when this value is explicitly `True`; `False`, `Unknown`, and blank values are included. |
+| `manifest_jsonl`, `agent_manifest_jsonl` | Optional supporting input metadata used to reconstruct canonical turns and scope the input hash. |
+| `gold_what_happened`, `gold_facts_the_customer_gave`, `gold_first_thing_wrong_line`, `gold_first_thing_wrong_what`, `gold_human_review_notes`, `gold_observability_notes` | Human or narrative reference only; not scored. |
+| `conversation_status`, `Conversation status`, `language_slice`, `Language slice` | Optional reference labels; not scored by golden dataset processing. |
+| `source_call_json`, `call_log`, and other reference columns | Not used as evaluator input or scored labels. |
 
-Two optional columns enable additional labeled dimensions:
-
-| CSV column | Use |
-|---|---|
-| `conversation_status` or `Conversation status` | Explicit conversation-completeness label. Values must be one of the status values below. |
-| `language_slice` or `Language slice` | Explicit language or other slice label. It is trimmed but otherwise not restricted to a closed vocabulary. |
-
-Blank optional cells are treated as unavailable. The loader does not infer a completeness or language label from the transcript or from `What happened`.
+`model_input_json_excluding_saved_outcome` must be outcome-free. Saved outcomes and all `gold_*` columns are labels or references and are never passed to the evaluator. `conversation_status` and `language_slice` labels may be used for reporting by other datasets, but the golden processing workflow keeps these reference dimensions unscored.
 
 ## Conversation status values
 
@@ -38,8 +33,14 @@ Blank optional cells are treated as unavailable. The loader does not infer a com
 - `MACHINE_OR_VOICEMAIL`
 - `UNKNOWN`
 
-Use the exact enum spelling. Keep language-slice labels consistent, including capitalization, so equivalent slices are grouped together.
+If these labels are present for reference, use the exact enum spelling. Keep language-slice labels consistent, including capitalization, so equivalent slices are grouped together.
 
 ## Evaluation outputs compared
 
-The benchmark consumes persisted versioned runs, not historical per-evaluator result rows. It supports outcome, sentiment, emotion, overall quality, explicitly labeled conversation status, and explicit language-slice metrics. Compliance false positives and false negatives are summarized separately from those dimensions. See [the benchmark interpretation guide](./PHASE_7_VALIDATION_BENCHMARK.md) for availability and metric details.
+The benchmark consumes persisted versioned runs in an input-specific `golden_dataset:<input-hash>` namespace, not normal interaction runs or historical per-evaluator result rows. It scores outcome, sentiment, emotion, and overall quality; compliance false positives and false negatives are summarized separately. Narrative observability labels and other reference columns are not scored. See [the benchmark interpretation guide](./PHASE_7_VALIDATION_BENCHMARK.md) for availability and metric details.
+
+## Import and report
+
+The dashboard's **Import golden CSV** action explicitly imports the root-level file, stores its labels, evaluates each eligible row from the outcome-free input, and reports created, reused, and failed evaluations with per-record errors. Import is separate from call ingestion and does not create normal interaction, transcript, artifact, timeline, or observability records.
+
+The CLI report utility reads the same root-level CSV and only looks up runs in the matching benchmark namespace. It does not import labels or fall back to normal interaction runs. Provision the source CSV at the repository root before using either workflow.

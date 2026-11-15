@@ -1,12 +1,18 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.api.app import HumanReviewSubmission, create_app
+from app.domain.benchmark import BenchmarkReport
 from app.domain.envelope import InteractionEnvelope
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.domain.golden import GoldenCallLabel
 from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.golden_repo import GoldenDatasetRepository
 from app.storage.orm import InteractionRow
+from app.validation.golden_benchmark import (
+    GoldenBenchmarkImportResult,
+    GoldenRecordResult,
+)
 
 
 def _batch(evaluation_id, batch_name, parsed_output):
@@ -178,6 +184,58 @@ def test_dashboard_reads_batched_run_reviews_and_file_scoped_benchmark(
         "conversation_status": "unavailable",
         "language_slice": "unavailable",
     }
+
+
+def test_golden_import_route_returns_summary_errors_and_report(
+    session_factory, monkeypatch
+):
+    csv_path = (
+        Path(__file__).resolve().parents[2]
+        / "Conversense_AI_25_Records_Input_and_Golden.csv"
+    )
+    expected = GoldenBenchmarkImportResult(
+        dataset_hash="dataset-hash",
+        records_seen=3,
+        labels_imported=2,
+        test_records_excluded=1,
+        evaluations_created=1,
+        evaluations_reused=0,
+        evaluations_failed=1,
+        records=[
+            GoldenRecordResult(
+                call_id="call-failed",
+                evaluation_status="failed",
+                error="Golden record evaluation failed.",
+            )
+        ],
+        report=BenchmarkReport(total_interactions=2),
+    )
+
+    class ImportService:
+        def __init__(self, _session_factory):
+            pass
+
+        def import_and_benchmark(self, source_path, tenant_id):
+            assert source_path == csv_path
+            assert tenant_id == "tenant_dashboard"
+            return expected
+
+    monkeypatch.setattr(
+        "app.api.app.GoldenDatasetBenchmarkService", ImportService
+    )
+    app = create_app(session_factory)
+    result = _route(app, "/api/v1/golden-dataset/import", "POST")(
+        "tenant_dashboard", None
+    )
+
+    assert result["records_seen"] == 3
+    assert result["labels_imported"] == 2
+    assert result["test_records_excluded"] == 1
+    assert result["evaluations_created"] == 1
+    assert result["evaluations_reused"] == 0
+    assert result["evaluations_failed"] == 1
+    assert result["records"][0]["error"] == "Golden record evaluation failed."
+    assert result["report"]["total_interactions"] == 2
 
 
 def test_dashboard_has_separate_observability_detail_and_analytics_routes(

@@ -160,10 +160,31 @@ def test_benchmark_uses_explicit_label_availability_without_seeding_or_threshold
     source = (
         REPOSITORY_ROOT / "frontend" / "src" / "views" / "BenchmarkView.jsx"
     ).read_text(encoding="utf-8")
+    client_source = (
+        REPOSITORY_ROOT / "frontend" / "src" / "api" / "client.js"
+    ).read_text(encoding="utf-8")
 
     assert "benchmark.details?.availability?.conversation_status" in source
     assert "benchmark.details?.availability?.language_slice" in source
     assert "language_slice_metrics" in source
+    assert "const result = await api.importGolden()" in source
+    assert "setBenchmark(result.report)" in source
+    for field in (
+        "records_seen",
+        "labels_imported",
+        "test_records_excluded",
+        "evaluations_created",
+        "evaluations_reused",
+        "evaluations_failed",
+    ):
+        assert f"importResult.{field}" in source
+    assert "importResult.records" in source
+    assert "record.call_id" in source
+    assert "record.error" in source
+    assert "request('/golden-dataset/import'" in client_source
+    assert "request('/golden-dataset/benchmark'" in client_source
+    assert "@typedef {Object} GoldenBenchmarkImportResult" in client_source
+    assert "@returns {Promise<BenchmarkReport>}" in client_source
     assert "api.seedAll" not in source
     assert "Release threshold" not in source
 

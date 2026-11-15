@@ -1,6 +1,6 @@
 # Golden benchmark interpretation
 
-The golden benchmark measures agreement between explicit human labels and the latest versioned evaluation run for each labeled interaction. It is a diagnostic report, not a release gate: the design defines no combined numeric score or fixed release threshold.
+The golden benchmark measures agreement between explicit human labels and versioned evaluations of the dataset's outcome-free model input. Runs are isolated in an input-specific `golden_dataset:<input-hash>` namespace; normal interaction runs are not used. It is a diagnostic report, not a release gate: the design defines no combined numeric score or fixed release threshold.
 
 ## Evaluation runs
 
@@ -22,20 +22,19 @@ The benchmark reports per-dimension accuracy, precision, recall, macro F1, suppo
 - `sentiment`
 - `emotion`
 - `overall_quality`
-- `conversation_status`, only when explicitly labeled
 
-Language-slice metrics are computed for the same dimensions within each explicitly labeled slice. If no `conversation_status` or `language_slice` labels are present, that dimension is reported as unavailable; values are never inferred from transcript text or `What happened`.
+Golden dataset processing scores these four dimensions only. Narrative observability labels, conversation status, language slices, and other reference columns remain unscored. Compliance false positives and false negatives are reported separately using the `gold_never-rule_broken` label. `gold_observability_notes` and similar fields are not evaluator input.
 
-Compliance false positives and false negatives are reported separately using the `Never-rule broken` label. `What happened` is retained as reference text and is not benchmarked as a predicted category.
+The loader excludes only rows whose `gold_test_flag` is explicitly `True`; `False`, `Unknown`, and blank values remain eligible. The model input is read only from `model_input_json_excluding_saved_outcome`; no `source_call_json`, `call_log`, saved outcome, or `gold_*` field is passed to the evaluator.
 
 ## Run and interpret the benchmark
 
-From the repository root, run:
+The source CSV is user-provided and not bundled with the repository. Provision `Conversense_AI_25_Records_Input_and_Golden.csv` at the repository root before either workflow. The dashboard's **Import golden CSV** action is the explicit step that persists labels and evaluates the dataset. Its result shows records seen, imported labels, excluded tests, created/reused/failed runs, per-record errors, and the benchmark report from that import.
+
+After import, run the report utility from the repository root:
 
 ```powershell
-python scripts/validate_golden_dataset.py --golden-csv data/golden_dataset.csv --tenant-id health_campaign
+python scripts/validate_golden_dataset.py --tenant-id health_campaign
 ```
 
-The script reads persisted versioned runs and writes `docs/GOLDEN_DATASET_BENCHMARK.md`. Missing evaluation runs are treated as abstentions (`Can't tell`) for supported dimensions. Confirm that each CSV row points to the intended interaction and that optional labels use the documented format before interpreting a slice.
-
-The checked-in dataset may not contain the optional completeness and language labels. In that case the report marks those metrics unavailable rather than suggesting that coverage or quality is zero.
+The script reads the supplied root-level CSV and only persisted runs in the corresponding input-specific benchmark namespace. It does not import labels or fall back to normal latest interaction runs. Missing evaluation runs are treated as abstentions (`Can't tell`) for supported dimensions. The report is written to `docs/GOLDEN_DATASET_BENCHMARK.md`.

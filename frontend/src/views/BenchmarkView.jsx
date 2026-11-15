@@ -17,6 +17,7 @@ function AvailabilityCard({ title, status }) {
 
 export default function BenchmarkView() {
   const [benchmark, setBenchmark] = useState(null);
+  const [importResult, setImportResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState(null);
@@ -42,8 +43,9 @@ export default function BenchmarkView() {
     setImporting(true);
     setError(null);
     try {
-      await api.importGolden();
-      await loadBenchmark();
+      const result = await api.importGolden();
+      setImportResult(result);
+      setBenchmark(result.report);
     } catch (err) {
       console.error('Failed to import golden dataset:', err);
       setError(err.message || 'Failed to import golden dataset.');
@@ -69,7 +71,7 @@ export default function BenchmarkView() {
               Golden dataset benchmark
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Dimension metrics use the latest versioned evaluation run for each labeled interaction.
+              Dimension metrics compare labels with evaluations of the dataset's outcome-free input.
             </p>
           </div>
         </div>
@@ -100,6 +102,59 @@ export default function BenchmarkView() {
           <AlertTriangle className="w-4 h-4 shrink-0" />
           {error}
         </div>
+      )}
+
+      {importResult && (
+        <>
+          <section className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
+              Latest import processing
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {[
+                ['Records seen', importResult.records_seen],
+                ['Labels imported', importResult.labels_imported],
+                ['Tests excluded', importResult.test_records_excluded],
+                ['Evaluations created', importResult.evaluations_created],
+                ['Evaluations reused', importResult.evaluations_reused],
+                ['Evaluations failed', importResult.evaluations_failed],
+              ].map(([label, count]) => (
+                <div key={label} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70">
+                  <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    {label}
+                  </p>
+                  <p className="mt-1 text-lg font-bold font-mono text-slate-900 dark:text-white">
+                    {count}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {importResult.records?.some((record) => record.error) && (
+            <section
+              aria-live="polite"
+              className="p-4 sm:p-5 rounded-2xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30"
+            >
+              <h3 className="text-sm font-bold text-rose-800 dark:text-rose-300 mb-3">
+                Per-record processing errors
+              </h3>
+              <ul className="space-y-2">
+                {importResult.records
+                  .filter((record) => record.error)
+                  .map((record) => (
+                    <li
+                      key={record.call_id}
+                      className="text-xs text-rose-700 dark:text-rose-300"
+                    >
+                      <span className="font-semibold">{record.call_id}:</span>{' '}
+                      {record.error}
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          )}
+        </>
       )}
 
       {loading && !benchmark ? (
