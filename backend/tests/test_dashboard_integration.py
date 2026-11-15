@@ -370,6 +370,24 @@ def test_dashboard_has_call_import_surface_and_no_legacy_local_ingest():
         assert legacy_api not in client_source
 
 
+def test_call_import_passes_inspect_action_to_the_selected_drilldown_call():
+    from pathlib import Path
+
+    repository_root = Path(__file__).resolve().parents[2]
+    app_source = (
+        repository_root / "frontend" / "src" / "App.jsx"
+    ).read_text(encoding="utf-8")
+    import_view_source = (
+        repository_root / "frontend" / "src" / "views" / "CallImportView.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "CallImportView" in app_source
+    assert "onInspectCall={handleInspectCall}" in app_source
+    assert "initialCallId={selectedCallId}" in app_source
+    assert "function CallImportView({ onInspectCall })" in import_view_source
+    assert "onInspectCall(call.interaction_id)" in import_view_source
+
+
 def test_timeline_turn_card_keeps_unknown_speaker_and_timing_unavailable():
     from pathlib import Path
 

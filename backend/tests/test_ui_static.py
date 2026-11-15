@@ -66,6 +66,25 @@ def test_interactions_view_exposes_design_supported_filters():
         assert filter_name in source
 
 
+def test_call_import_results_render_processing_status_and_safe_stage_errors():
+    source = (
+        REPOSITORY_ROOT / "frontend" / "src" / "views" / "CallImportView.jsx"
+    ).read_text(encoding="utf-8")
+
+    for processing_field in (
+        "call.processing.transcript_turns",
+        "call.processing.timeline_status",
+        "call.processing.observability_status",
+        "call.processing.evaluation_status",
+        "call.processing.evaluation_run_id",
+    ):
+        assert processing_field in source
+    assert "error.stage" in source
+    assert "error.message" in source
+    assert "Inspect call" in source
+    assert "does not run evaluation" not in source
+
+
 def test_timeline_turn_card_does_not_infer_heard_without_playback_metadata():
     source = (
         REPOSITORY_ROOT

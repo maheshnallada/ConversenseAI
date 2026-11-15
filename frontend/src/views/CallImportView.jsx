@@ -66,7 +66,21 @@ function StatusBadge({ status }) {
   );
 }
 
-export default function CallImportView() {
+function ProcessingStatusBadge({ label, status }) {
+  const classes = status === 'ready'
+    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+    : status === 'failed'
+      ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] ${classes}`}>
+      <span className="font-semibold">{label}:</span>
+      <span className="capitalize">{status || 'unknown'}</span>
+    </span>
+  );
+}
+
+export default function CallImportView({ onInspectCall }) {
   const [mode, setMode] = useState('single');
   const [source, setSource] = useState('computer');
   const [stagedRefreshKey, setStagedRefreshKey] = useState(0);
@@ -204,7 +218,7 @@ export default function CallImportView() {
           <div>
             <h2 className="text-lg font-bold text-slate-900 dark:text-white">Import calls</h2>
             <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-              Import one call or a folder batch. Calls are validated and saved locally; importing does not run evaluation.
+              Successfully imported calls are processed for transcript, observability, and evaluation results. Any stage errors are shown with each result.
             </p>
             <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
               Each call folder must contain <code>call.json</code> and <code>recording.wav</code>.
@@ -431,7 +445,18 @@ export default function CallImportView() {
                       {call.interaction_id || 'Call ID unavailable'}
                     </p>
                   </div>
-                  <StatusBadge status={call.status} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge status={call.status} />
+                    {isSuccessful(call.status) && call.interaction_id && (
+                      <button
+                        type="button"
+                        onClick={() => onInspectCall(call.interaction_id)}
+                        className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-800 hover:bg-cyan-100 dark:border-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-300 dark:hover:bg-cyan-950/70"
+                      >
+                        Inspect call
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-600 dark:text-slate-300">
                   <span>{call.files_count} files</span>
@@ -459,6 +484,49 @@ export default function CallImportView() {
                 {call.error && (
                   <p className="mt-3 rounded-lg bg-rose-50 p-2.5 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
                     {call.error}
+                  </p>
+                )}
+                {call.processing ? (
+                  <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/40">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                        Post-import processing
+                      </h4>
+                      <span className="text-[11px] text-slate-600 dark:text-slate-300">
+                        Transcript turns: {call.processing.transcript_turns}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <ProcessingStatusBadge
+                        label="Timeline"
+                        status={call.processing.timeline_status}
+                      />
+                      <ProcessingStatusBadge
+                        label="Observability"
+                        status={call.processing.observability_status}
+                      />
+                      <ProcessingStatusBadge
+                        label="Evaluation"
+                        status={call.processing.evaluation_status}
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Evaluation run: {call.processing.evaluation_run_id || 'Not available'}
+                    </p>
+                    {call.processing.errors?.length > 0 && (
+                      <ul className="space-y-1 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
+                        {call.processing.errors.map((error, errorIndex) => (
+                          <li key={`${error.stage}-${errorIndex}`}>
+                            <span className="font-semibold capitalize">{error.stage}:</span>
+                            {' '}{error.message}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
+                    Post-import processing was not run for this result.
                   </p>
                 )}
               </article>

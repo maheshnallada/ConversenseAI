@@ -78,7 +78,9 @@ function AppContent() {
               />
             )}
             {activeTab === 'benchmark' && <BenchmarkView />}
-            {activeTab === 'import-calls' && <CallImportView />}
+            {activeTab === 'import-calls' && (
+              <CallImportView onInspectCall={handleInspectCall} />
+            )}
           </div>
         </main>
       </div>
