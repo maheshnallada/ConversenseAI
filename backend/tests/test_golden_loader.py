@@ -45,6 +45,20 @@ def test_golden_dataset_parses_supplied_csv_and_maps_model_inputs():
     assert dataset.records[0].evaluation_input is None
 
 
+def test_golden_dataset_rejects_duplicate_headers_before_reading_rows(tmp_path: Path):
+    csv_path = tmp_path / "duplicate_headers.csv"
+    csv_path.write_text(
+        "call_id,model_input_json_excluding_saved_outcome,"
+        "gold_correct_outcome,gold_correct_outcome,gold_sentiment,"
+        "gold_emotion,gold_overall,gold_never-rule_broken\n"
+        "call_duplicate,not-json,Expected,Corrupted,Neutral,Neutral,Good,None\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Duplicate CSV header"):
+        load_golden_dataset(csv_path, tenant_id="tenant_gold")
+
+
 def test_process_call_data_matches_manifest_enrichment_and_embedded_call_id():
     with GOLDEN_CSV.open("r", encoding="utf-8-sig", newline="") as file:
         record = next(csv.DictReader(file))

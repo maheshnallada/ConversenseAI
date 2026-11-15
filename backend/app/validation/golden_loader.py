@@ -147,6 +147,16 @@ def load_golden_dataset(csv_path: Path | str, tenant_id: str = "tenant_default")
         with path.open("r", encoding="utf-8-sig", newline="") as file:
             reader = csv.DictReader(file)
             fieldnames = reader.fieldnames or []
+            seen_headers: set[str] = set()
+            duplicate_headers: set[str] = set()
+            for header in fieldnames:
+                if header in seen_headers:
+                    duplicate_headers.add(header)
+                seen_headers.add(header)
+            if duplicate_headers:
+                raise ValueError(
+                    f"Duplicate CSV header names: {sorted(duplicate_headers)}"
+                )
             missing_headers = sorted(REQUIRED_HEADERS - set(fieldnames))
             if not fieldnames or missing_headers:
                 raise ValueError(f"Missing required golden dataset headers: {missing_headers}")

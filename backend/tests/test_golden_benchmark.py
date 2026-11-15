@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import select
 
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
@@ -67,6 +68,16 @@ def _write_csv(path, rows):
         writer = csv.DictWriter(file, fieldnames=HEADERS)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_duplicate_header_csv(path):
+    path.write_text(
+        "call_id,model_input_json_excluding_saved_outcome,"
+        "gold_correct_outcome,gold_correct_outcome,gold_sentiment,"
+        "gold_emotion,gold_overall,gold_never-rule_broken\n"
+        "call_duplicate,not-json,Expected,Corrupted,Neutral,Neutral,Good,None\n",
+        encoding="utf-8",
+    )
 
 
 def _batch(call_id, batch_name, status, output):
@@ -384,3 +395,20 @@ def test_report_does_not_score_optional_reference_columns(
     assert "conversation_status" not in report.dimension_metrics
     assert "conversation_status" not in report.confusion_matrices
     assert "language_slice_metrics" not in report.details
+
+
+def test_import_rejects_duplicate_headers_before_persisting_labels(
+    session_factory, tmp_path
+):
+    csv_path = tmp_path / "duplicate_headers.csv"
+    _write_duplicate_header_csv(csv_path)
+
+    with pytest.raises(ValueError, match="Duplicate CSV header"):
+        GoldenDatasetBenchmarkService(session_factory).import_and_benchmark(
+            csv_path, TENANT_ID
+        )
+
+    assert (
+        GoldenDatasetRepository(session_factory).get_by_call_id("call_duplicate")
+        is None
+    )
