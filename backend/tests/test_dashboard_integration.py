@@ -91,7 +91,7 @@ def _route(app, path, method):
     )
 
 
-def test_dashboard_reads_batched_run_reviews_and_explicit_benchmark_labels(
+def test_dashboard_reads_batched_run_reviews_and_file_scoped_benchmark(
     session_factory,
 ):
     app = create_app(session_factory)
@@ -167,9 +167,17 @@ def test_dashboard_reads_batched_run_reviews_and_explicit_benchmark_labels(
     benchmark = _route(app, "/api/v1/golden-dataset/benchmark", "GET")(
         "tenant_dashboard"
     )
-    assert benchmark["dimension_metrics"]["conversation_status"]["support"] == 1
-    assert benchmark["details"]["availability"]["language_slice"] == "available"
-    assert "en" in benchmark["details"]["language_slice_metrics"]
+    assert benchmark["total_interactions"] == 25
+    assert set(benchmark["dimension_metrics"]) == {
+        "correct_outcome",
+        "sentiment",
+        "emotion",
+        "overall_quality",
+    }
+    assert benchmark["details"]["availability"] == {
+        "conversation_status": "unavailable",
+        "language_slice": "unavailable",
+    }
 
 
 def test_dashboard_has_separate_observability_detail_and_analytics_routes(

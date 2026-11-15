@@ -72,6 +72,31 @@ def test_golden_dataset_save_many_and_get_all(repo):
     assert "call_test_m2" in call_ids
 
 
+def test_save_many_updates_labels_for_an_existing_call_id(repo):
+    repo.save_label(
+        GoldenCallLabel(
+            call_id="call_test_label_update",
+            what_happened="Original description",
+            correct_outcome="Not interested",
+        )
+    )
+
+    repo.save_many(
+        [
+            GoldenCallLabel(
+                call_id="call_test_label_update",
+                what_happened="Corrected description",
+                correct_outcome="Expert call booked",
+            )
+        ]
+    )
+
+    saved = repo.get_by_call_id("call_test_label_update")
+    assert saved is not None
+    assert saved.what_happened == "Corrected description"
+    assert saved.correct_outcome == "Expert call booked"
+
+
 def test_save_many_rolls_back_entire_batch_on_invalid_label(repo):
     valid = GoldenCallLabel(
         call_id="call_test_atomic_valid",

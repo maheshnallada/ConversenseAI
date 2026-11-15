@@ -44,8 +44,7 @@ from app.storage.observability_repo import ObservabilityRepository
 from app.storage.review_repo import HumanReviewRepository
 from app.storage.transcript_repo import TranscriptRepository, TranscriptTurnConflict
 from app.storage.timeline_repo import TimelineRepository
-from app.validation.benchmark import BenchmarkEngine
-from app.validation.golden_loader import load_golden_dataset
+from app.validation.golden_benchmark import GoldenDatasetBenchmarkService
 
 logger = get_logger("conversense.api")
 
@@ -316,6 +315,29 @@ def create_app(
 
     def get_golden_repo() -> GoldenDatasetRepository:
         return GoldenDatasetRepository(session_factory)
+
+    def get_golden_csv_path(requested_path: str | None = None) -> Path:
+        root = Path(__file__).resolve().parent.parent.parent.parent
+        csv_path = root / "Conversense_AI_25_Records_Input_and_Golden.csv"
+        if csv_path.is_symlink():
+            raise HTTPException(
+                status_code=400,
+                detail="The configured golden dataset must not be a symlink.",
+            )
+        if requested_path:
+            requested = Path(requested_path)
+            if not requested.is_absolute():
+                requested = root / requested
+            try:
+                matches_configured_file = requested.resolve() == csv_path.resolve()
+            except (OSError, RuntimeError):
+                matches_configured_file = False
+            if requested.is_symlink() or not matches_configured_file:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Only the configured golden dataset may be imported.",
+                )
+        return csv_path
 
     def get_timeline_repo() -> TimelineRepository:
         return TimelineRepository(session_factory)
@@ -766,67 +788,42 @@ def create_app(
         tenant_id: Annotated[str, Depends(require_tenant_id)],
         body: Optional[ImportGoldenRequest] = None,
     ):
-        root = Path(__file__).resolve().parent.parent.parent.parent
-        data_root = (root / "data").resolve()
-        if body and body.csv_path:
-            requested_path = Path(body.csv_path)
-            csv_path = (
-                requested_path if requested_path.is_absolute() else data_root / requested_path
+        csv_path = get_golden_csv_path(body.csv_path if body else None)
+        try:
+            result = GoldenDatasetBenchmarkService(session_factory).import_and_benchmark(
+                csv_path,
+                tenant_id,
             )
-        else:
-            csv_path = data_root / "golden_dataset.csv"
-        csv_path = csv_path.resolve()
-        if not csv_path.is_relative_to(data_root):
+            return asdict(result)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404, detail="The configured golden dataset was not found."
+            ) from exc
+        except ValueError as exc:
             raise HTTPException(
                 status_code=400,
-                detail="csv_path must resolve beneath the approved dataset directory",
-            )
-        try:
-            labels = load_golden_dataset(csv_path)
-            get_golden_repo().save_many(labels)
-            return {"imported": len(labels), "path": str(csv_path)}
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+                detail="The configured golden dataset is invalid.",
+            ) from exc
 
     @app.get("/api/v1/golden-dataset/benchmark")
     def get_golden_benchmark(
         tenant_id: Annotated[str, Depends(require_tenant_id)],
     ):
-        golden_repo = get_golden_repo()
-        eval_repo = get_eval_repo()
-
-        golden_labels = [l for l in golden_repo.get_all() if not l.call_id.startswith("call_test_")]
-        if not golden_labels:
-            candidate_paths = [
-                Path("data/golden_dataset.csv"),
-                Path(__file__).resolve().parent.parent.parent.parent / "data" / "golden_dataset.csv",
-                Path(__file__).resolve().parent.parent.parent / "data" / "golden_dataset.csv",
-                Path("/app/data/golden_dataset.csv"),
-            ]
-            for p in candidate_paths:
-                if p.exists():
-                    try:
-                        imported = load_golden_dataset(p)
-                        golden_repo.save_many(imported)
-                        golden_labels = [l for l in golden_repo.get_all() if not l.call_id.startswith("call_test_")]
-                        break
-                    except Exception as e:
-                        logger.warning(f"Failed to auto-import golden dataset from {p}: {e}")
-
-        if not golden_labels:
-            raise HTTPException(status_code=404, detail="No golden dataset labels loaded.")
-
-        evaluations_by_call = {}
-        for g in golden_labels:
-            interaction_id = g.interaction_id or g.call_id
-            evaluations_by_call[g.call_id] = eval_repo.get_latest_run(
+        csv_path = get_golden_csv_path()
+        try:
+            report = GoldenDatasetBenchmarkService(session_factory).get_benchmark(
+                csv_path,
                 tenant_id,
-                interaction_id,
             )
-
-        engine = BenchmarkEngine()
-        report = engine.evaluate_benchmark(golden_labels, evaluations_by_call)
-
-        return asdict(report)
+            return asdict(report)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404, detail="The configured golden dataset was not found."
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="The configured golden dataset is invalid.",
+            ) from exc
 
     return app
