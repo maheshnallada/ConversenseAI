@@ -1,9 +1,22 @@
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 from app.domain.transcript import TranscriptTurn
 from app.reconstruction.normalizer import normalize_text
+
+
+def _parse_seconds(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(seconds):
+        return None
+    return round(seconds, 3)
 
 
 class TranscriptProcessor:
@@ -49,16 +62,22 @@ class TranscriptProcessor:
 
         for idx, msg in enumerate(messages):
             role = msg.get("role", "unknown")
-            speaker = "agent" if role == "assistant" else "customer" if role == "user" else "system"
+            speaker = (
+                "agent"
+                if role == "assistant"
+                else "customer"
+                if role == "user"
+                else "unknown"
+            )
             raw_text = msg.get("content") or ""
             norm_text = normalize_text(raw_text)
 
             meta = msg.get("metadata") or {}
             t = msg.get("t")
-            start_s = round(float(t), 3) if t is not None else None
+            start_s = _parse_seconds(t)
 
             audio_s = meta.get("audio_s")
-            duration_s = round(float(audio_s), 3) if audio_s is not None else None
+            duration_s = _parse_seconds(audio_s)
             end_s = (
                 round(start_s + duration_s, 3)
                 if (start_s is not None and duration_s is not None)
@@ -86,20 +105,20 @@ class TranscriptProcessor:
                     u_item = user_manifest[turn_key]
                     extra_meta["user_wav"] = u_item.get("user_wav")
                     extra_meta["manifest_transcript"] = u_item.get("transcript")
-                    if duration_s is None and u_item.get("seconds"):
-                        duration_s = round(float(u_item["seconds"]), 3)
-                        if start_s is not None:
-                            end_s = round(start_s + duration_s, 3)
+                    if duration_s is None and u_item.get("seconds") is not None:
+                        duration_s = _parse_seconds(u_item["seconds"])
+                    if start_s is not None and duration_s is not None:
+                        end_s = round(start_s + duration_s, 3)
 
                 elif speaker == "agent" and turn_key in agent_manifest:
                     a_item = agent_manifest[turn_key]
                     extra_meta["agent_wav"] = a_item.get("agent_wav")
                     extra_meta["manifest_text"] = a_item.get("text")
                     extra_meta["at_s"] = a_item.get("at_s")
-                    if duration_s is None and a_item.get("seconds"):
-                        duration_s = round(float(a_item["seconds"]), 3)
-                        if start_s is not None:
-                            end_s = round(start_s + duration_s, 3)
+                    if duration_s is None and a_item.get("seconds") is not None:
+                        duration_s = _parse_seconds(a_item["seconds"])
+                    if start_s is not None and duration_s is not None:
+                        end_s = round(start_s + duration_s, 3)
 
             turn_id = f"{call_id}_turn_{idx}"
             turns.append(

@@ -91,3 +91,35 @@ def test_validate_call_files_valid_folder(tmp_path: Path):
     assert res.user_manifest_count == 2
     assert res.phone_answered is True
 
+
+def test_validate_call_files_requires_only_call_json_and_recording(tmp_path: Path):
+    (tmp_path / "call.json").write_text('{"call_id": "minimal-call"}', encoding="utf-8")
+    create_test_wav(tmp_path / "recording.wav")
+
+    result = validate_call_files(tmp_path)
+
+    assert result.is_valid is True
+    assert result.errors == []
+
+
+def test_validate_call_files_rejects_missing_required_files(tmp_path: Path):
+    result = validate_call_files(tmp_path)
+
+    assert result.is_valid is False
+    assert {
+        error for error in result.errors if error.startswith("Missing required file:")
+    } == {
+        "Missing required file: call.json",
+        "Missing required file: recording.wav",
+    }
+
+
+def test_validate_call_files_rejects_unreadable_recording(tmp_path: Path):
+    (tmp_path / "call.json").write_text('{"call_id": "minimal-call"}', encoding="utf-8")
+    (tmp_path / "recording.wav").write_bytes(b"not a wav file")
+
+    result = validate_call_files(tmp_path)
+
+    assert result.is_valid is False
+    assert any("recording.wav" in error for error in result.errors)
+

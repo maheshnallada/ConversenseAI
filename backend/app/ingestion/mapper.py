@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +11,7 @@ from app.domain.envelope import (
     InteractionEvent,
     InteractionStatus,
 )
-from app.storage.artifacts import ArtifactStore
+from app.storage.artifacts import ArtifactStore, compute_sha256
 from app.storage.orm import ArtifactRow
 from app.validation.audio import (
     CallFilesValidationResult,
@@ -84,16 +85,28 @@ def map_call_folder(
     artifact_rows: list[ArtifactRow] = []
     now = datetime.now(timezone.utc)
 
-    # Collect all files in folder
-    all_files = sorted(folder.iterdir(), key=lambda p: p.name)
+    tenant_call_namespace = hashlib.sha256(
+        f"{tenant_id}\0{call_id}".encode("utf-8")
+    ).hexdigest()
+    all_files = sorted(
+        (
+            path
+            for path in folder.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        ),
+        key=lambda path: path.relative_to(folder).as_posix(),
+    )
     for file_path in all_files:
-        if file_path.is_dir():
-            continue
+        relative_path = file_path.relative_to(folder)
+        digest = compute_sha256(file_path)
 
         artifact_type = _determine_artifact_type(file_path.name)
         stored = artifact_store.put_file(
             file_path,
-            relative_dest=f"{tenant_id}/{folder.name}/{file_path.name}",
+            relative_dest=(
+                f"imports/{tenant_call_namespace}/{digest}/"
+                f"{relative_path.as_posix()}"
+            ),
         )
 
         validation_status = "valid"
@@ -194,7 +207,6 @@ def map_call_folder(
         "channel": call_data.get("channel"),
         "environment": call_data.get("environment"),
         "room": call_data.get("room"),
-        "folder_name": folder.name,
         "phone_answered": validation.phone_answered,
         "models": models,
         "meta": meta,
@@ -223,7 +235,7 @@ def map_call_folder(
         status=status,
         started_at=started_at,
         ended_at=ended_at,
-        correlation_id=folder.name,
+        correlation_id=call_key,
         trace_id=call_data.get("room"),
         participants=participants,
         events=events,
