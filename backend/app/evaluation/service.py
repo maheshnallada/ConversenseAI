@@ -166,8 +166,13 @@ class EvaluationService:
             "requires_human_review": summary.requires_human_review,
             "review_reasons": summary.review_reasons,
             "what_happened": summary.what_happened,
+            "first_thing_wrong_category": summary.first_thing_wrong_category,
             "first_thing_wrong_line": summary.first_thing_wrong_line,
+            "first_thing_wrong_description": summary.first_thing_wrong_description,
             "first_thing_wrong_what": summary.first_thing_wrong_what,
+            "technical_failure_category": summary.technical_failure_category,
+            "conversational_failure_category": summary.conversational_failure_category,
+            "compliance_failure_category": summary.compliance_failure_category,
             "appointment_validation": (
                 appointment_validation.__dict__ if appointment_validation else None
             ),

@@ -475,12 +475,14 @@ F. EVIDENCE
 - For first thing wrong, cite the earliest problem line and, if needed, the earlier
   customer line that makes it a problem.
 - Do not infer technical timing from text.
-- For first_thing_wrong_candidate.category use one of:
-  TECHNICAL, CONVERSATIONAL, COMPLIANCE, NONE.
-  This batch should normally return CONVERSATIONAL or NONE. Use COMPLIANCE only
-  when the transcript clearly establishes the issue; Batch 3 performs the dedicated
-  compliance evaluation. Use TECHNICAL only when explicit technical metadata is
-  provided in this batch. Python remains responsible for final cross-category ordering.
+- For first_thing_wrong, identify the earliest issue that occurred.
+  Taxonomy for first_thing_wrong.category:
+  * Technical failures: NO_AGENT_RESPONSE, LATE_AGENT_RESPONSE, AGENT_AUDIO_NOT_PLAYED, AGENT_AUDIO_CUT_OFF, LONG_AGENT_RESPONSE_DELAY
+  * Conversational failures: AGENT_REPEATED_QUESTION, IGNORED_CUSTOMER_INFORMATION, IRRELEVANT_AGENT_RESPONSE, CONTRADICTORY_AGENT_RESPONSE, POOR_OBJECTION_HANDLING, INAPPROPRIATE_CLOSING, CUSTOMER_INTERRUPTED_AGENT (use CUSTOMER_INTERRUPTED_AGENT only when evidence shows an actual failure, such as an incomplete agent response or failure to recover)
+  * Compliance failures: POLICY_OR_INSURER_PUSHING, PREMIUM_FIGURE_DISCLOSURE, BOOKING_WITHOUT_CONSENT, SENSITIVE_INFORMATION_REQUEST, AI_IDENTITY_DENIAL
+  * Other / Neutral: OTHER, NONE, UNKNOWN
+- Do not return only an enum: provide category, line, quote, description, evidence_lines, and source ('conversation').
+- If no issue is found, return category "NONE", null line, and empty quote. Python cross-validates chronological ordering with technical and compliance findings.
 - Return only the structured conversation-quality and lifecycle result matching the schema.
 """
 

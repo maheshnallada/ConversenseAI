@@ -368,3 +368,68 @@ def test_customer_rejection_alone_does_not_make_overall_assessment_bad():
 
     assert result.overall_assessment == "Good"
     assert result.dimension_assessments["business_outcome"] == "Not interested"
+
+
+def test_first_thing_wrong_category_enum_and_separate_candidates():
+    timeline = SimpleNamespace(
+        first_technical_failure=FailureCandidate(
+            category="technical",
+            failure_type="AGENT_PLAYBACK_CUT",
+            time_s=15.0,
+            turn_index=3,
+            evidence="Agent speech cut during playback",
+        ),
+        first_conversational_failure=None,
+    )
+    batch_results = {
+        "conversation_quality": {
+            "first_thing_wrong": {
+                "category": "AGENT_REPEATED_QUESTION",
+                "line": 8,
+                "quote": "Do you currently have health insurance?",
+                "description": "The agent repeated the insurance question.",
+            }
+        },
+        "compliance_appointment": {
+            "compliance": {
+                "rule_results": {
+                    "NR001": {
+                        "status": "DETECTED",
+                        "evidence_line": 12,
+                        "reason": "Agent pushed policy",
+                    }
+                }
+            }
+        },
+    }
+    summary = derive_evaluation_summary(
+        batch_results=batch_results,
+        timeline=timeline,
+        appointment_validation=None,
+    )
+    assert summary.first_thing_wrong_category == "AGENT_AUDIO_CUT_OFF"
+    assert summary.first_thing_wrong_line == 3
+    assert summary.first_thing_wrong_description == "Agent speech cut during playback"
+    assert summary.technical_failure_category == "AGENT_AUDIO_CUT_OFF"
+    assert summary.conversational_failure_category == "AGENT_REPEATED_QUESTION"
+    assert summary.compliance_failure_category == "POLICY_OR_INSURER_PUSHING"
+
+
+def test_customer_interruption_without_actual_issue_is_not_treated_as_failure():
+    batch_results = {
+        "conversation_quality": {
+            "first_thing_wrong": {
+                "category": "CUSTOMER_INTERRUPTED_AGENT",
+                "line": 4,
+                "quote": "Customer said yes while agent was speaking",
+                "description": "Customer interrupted agent briefly with normal affirmative response",
+            }
+        }
+    }
+    summary = derive_evaluation_summary(
+        batch_results=batch_results,
+        timeline=None,
+        appointment_validation=None,
+    )
+    assert summary.conversational_failure_category == "NONE"
+    assert summary.first_thing_wrong_category == "NONE"

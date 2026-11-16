@@ -21,9 +21,26 @@ from app.evaluation.llm_client import (
 )
 from app.evaluation.prompts import BATCH_SYSTEM_PROMPTS
 from app.evaluation.schemas import (
+    AppointmentInterpretation,
+    Compliance,
     ComplianceAppointmentResult,
+    ComplianceRuleResult,
+    ComplianceRules,
+    CompletenessStage,
+    CompletenessStages,
+    ContextAwareness,
+    ContextAwarenessDimensions,
+    ConversationCompleteness,
+    ConversationQuality,
     ConversationQualityResult,
     ConversationUnderstandingResult,
+    EmotionResult,
+    FirstThingWrongCandidate,
+    OutcomeResult,
+    QualityDimension,
+    QualityDimensions,
+    SentimentResult,
+    WhatHappenedResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -229,6 +246,194 @@ class EvaluatorRegistry:
             {"role": "user", "content": user_content},
         ]
 
+    @staticmethod
+    def _is_not_answered(interaction: InteractionEnvelope) -> bool:
+        call_data = interaction.domain_data or {}
+        meta = call_data.get("meta") if isinstance(call_data.get("meta"), dict) else {}
+        call_timing_meta = (
+            call_data.get("call_timing")
+            if isinstance(call_data.get("call_timing"), dict)
+            else {}
+        )
+        end_reason = (
+            call_timing_meta.get("end_reason")
+            or call_data.get("end_reason")
+            or meta.get("end_reason")
+            or (meta.get("end_call") or {}).get("outcome")
+            or call_data.get("disposition")
+        )
+        if isinstance(end_reason, str):
+            norm = end_reason.strip().lower().replace("-", "_").replace(" ", "_")
+            if norm in {
+                "not_answered",
+                "no_answer",
+                "unanswered",
+                "missed",
+                "customer_unreachable",
+            }:
+                return True
+        return False
+
+    @staticmethod
+    def _build_deterministic_output(
+        batch_name: str,
+        interaction: InteractionEnvelope,
+        reason_label: str = "Call was not answered.",
+    ) -> BaseModel:
+        if batch_name == "conversation_understanding":
+            return ConversationUnderstandingResult(
+                outcome=OutcomeResult(
+                    label="Can't tell",
+                    evidence_line=None,
+                    quote="",
+                    reason=reason_label,
+                ),
+                customer_facts=[],
+                sentiment=SentimentResult(
+                    label="Can't tell",
+                    evidence_line=None,
+                    quote="",
+                    reason=reason_label,
+                ),
+                emotion=EmotionResult(
+                    label="Can't tell",
+                    evidence_line=None,
+                    quote="",
+                    reason=reason_label,
+                ),
+            )
+        elif batch_name == "conversation_quality":
+            dims = {
+                d: QualityDimension(
+                    score=None,
+                    evidence_line=None,
+                    quote="",
+                    reason=reason_label,
+                )
+                for d in (
+                    "clarity",
+                    "relevance",
+                    "empathy",
+                    "professionalism",
+                    "naturalness",
+                    "responsiveness",
+                    "closing_quality",
+                )
+            }
+            stages = CompletenessStages(
+                opening=CompletenessStage(status="not_observed", evidence_line=None),
+                customer_engagement=CompletenessStage(
+                    status="not_observed", evidence_line=None
+                ),
+                purpose_explanation=CompletenessStage(
+                    status="not_observed", evidence_line=None
+                ),
+                information_collection=CompletenessStage(
+                    status="not_observed", evidence_line=None
+                ),
+                outcome_establishment=CompletenessStage(
+                    status="not_observed", evidence_line=None
+                ),
+                closing=CompletenessStage(status="not_observed", evidence_line=None),
+            )
+            return ConversationQualityResult(
+                conversation_quality=ConversationQuality(
+                    dimensions=QualityDimensions(**dims),
+                    strengths=[],
+                    improvement_areas=[],
+                ),
+                context_awareness=ContextAwareness(
+                    issues=[],
+                    dimensions=ContextAwarenessDimensions(
+                        repeated_questions=False,
+                        ignored_information=False,
+                        contradictory_responses=False,
+                        irrelevant_followups=False,
+                        poor_objection_handling=False,
+                    ),
+                    score=None,
+                    first_context_failure_line=None,
+                ),
+                conversation_completeness=ConversationCompleteness(
+                    stages=stages,
+                    conversation_status="NO_MEANINGFUL_INTERACTION",
+                    customer_abandoned=None,
+                    reason=reason_label,
+                ),
+                what_happened=WhatHappenedResult(
+                    label="Can't tell",
+                    evidence_lines=[],
+                    reason=reason_label,
+                    review_required=False,
+                ),
+                first_thing_wrong=FirstThingWrongCandidate(
+                    category="NONE",
+                    line=None,
+                    quote="",
+                    description=reason_label,
+                    evidence_lines=[],
+                    source="metadata",
+                    review_required=False,
+                ),
+            )
+        else:
+            return ComplianceAppointmentResult(
+                compliance=Compliance(
+                    rule_results=ComplianceRules(
+                        NR001=ComplianceRuleResult(
+                            status="NOT_DETECTED",
+                            reason=reason_label,
+                            evidence_line=None,
+                            quote="",
+                        ),
+                        NR002=ComplianceRuleResult(
+                            status="NOT_DETECTED",
+                            reason=reason_label,
+                            evidence_line=None,
+                            quote="",
+                        ),
+                        NR003=ComplianceRuleResult(
+                            status="NOT_DETECTED",
+                            reason=reason_label,
+                            evidence_line=None,
+                            quote="",
+                        ),
+                        NR004=ComplianceRuleResult(
+                            status="NOT_DETECTED",
+                            reason=reason_label,
+                            evidence_line=None,
+                            quote="",
+                        ),
+                        NR005=ComplianceRuleResult(
+                            status="NOT_DETECTED",
+                            reason=reason_label,
+                            evidence_line=None,
+                            quote="",
+                        ),
+                        NR006=ComplianceRuleResult(
+                            status="NOT_DETECTED",
+                            reason=reason_label,
+                            evidence_line=None,
+                            quote="",
+                        ),
+                    ),
+                    potential_violations=[],
+                ),
+                appointment_interpretation=AppointmentInterpretation(
+                    appointment_type="NONE",
+                    consent_status="NOT_PRESENT",
+                    consent_evidence_line=None,
+                    consent_quote="",
+                    agent_proposal_line=None,
+                    agent_proposal_quote="",
+                    date_text=None,
+                    time_text=None,
+                    interpreted_date=None,
+                    interpreted_time=None,
+                    interpretation_reason=reason_label,
+                ),
+            )
+
     async def _evaluate_batch(
         self,
         batch_name: str,
@@ -238,7 +443,40 @@ class EvaluatorRegistry:
         timeline: ReconstructedTimeline | None = None,
     ) -> EvaluationBatchRecord:
         started_at = datetime.now(timezone.utc)
-        if not turns or not any(t.raw_text and t.raw_text.strip() for t in turns):
+        is_empty = not turns or not any(t.raw_text and t.raw_text.strip() for t in turns)
+        is_unanswered = self._is_not_answered(interaction)
+
+        if is_unanswered:
+            completed_at = datetime.now(timezone.utc)
+            deterministic_output = self._build_deterministic_output(
+                batch_name, interaction, "Customer did not answer the call."
+            )
+            return EvaluationBatchRecord(
+                evaluation_id=str(uuid4()),
+                batch_name=batch_name,
+                status="completed",
+                model="deterministic",
+                prompt_version=_PROMPT_VERSION,
+                schema_version=_SCHEMA_VERSION,
+                started_at=started_at,
+                completed_at=completed_at,
+                input_tokens=0,
+                output_tokens=0,
+                raw_output=deterministic_output.model_dump_json(),
+                parsed_output=deterministic_output.model_dump(mode="json"),
+                validation={
+                    "schema_valid": True,
+                    "evidence_valid": True,
+                    "issues": [],
+                    "review_reasons": [],
+                    "sensitive_data_detected": False,
+                },
+                review_required=False,
+                review_status="not_required",
+                review_reasons=[],
+            )
+
+        if is_empty:
             completed_at = datetime.now(timezone.utc)
             issues = ["Transcript is empty; cannot evaluate interaction."]
             return EvaluationBatchRecord(

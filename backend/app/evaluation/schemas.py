@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 OutcomeLabel = Literal[
@@ -69,7 +69,30 @@ WhatHappenedLabel = Literal[
     "Can't tell",
 ]
 FirstThingWrongCategory = Literal[
-    "TECHNICAL", "CONVERSATIONAL", "COMPLIANCE", "NONE"
+    "NO_AGENT_RESPONSE",
+    "LATE_AGENT_RESPONSE",
+    "AGENT_AUDIO_NOT_PLAYED",
+    "AGENT_AUDIO_CUT_OFF",
+    "CUSTOMER_INTERRUPTED_AGENT",
+    "LONG_AGENT_RESPONSE_DELAY",
+    "AGENT_REPEATED_QUESTION",
+    "IGNORED_CUSTOMER_INFORMATION",
+    "IRRELEVANT_AGENT_RESPONSE",
+    "CONTRADICTORY_AGENT_RESPONSE",
+    "POOR_OBJECTION_HANDLING",
+    "POLICY_OR_INSURER_PUSHING",
+    "PREMIUM_FIGURE_DISCLOSURE",
+    "BOOKING_WITHOUT_CONSENT",
+    "SENSITIVE_INFORMATION_REQUEST",
+    "AI_IDENTITY_DENIAL",
+    "INAPPROPRIATE_CLOSING",
+    "OTHER",
+    "NONE",
+    "UNKNOWN",
+    # Legacy compatibility values
+    "TECHNICAL",
+    "CONVERSATIONAL",
+    "COMPLIANCE",
 ]
 
 
@@ -197,12 +220,25 @@ class WhatHappenedResult(StrictModel):
 
 
 class FirstThingWrongCandidate(StrictModel):
+    category: FirstThingWrongCategory = "NONE"
     line: int | None = Field(default=None, ge=1)
     quote: str = ""
     description: str = ""
-    category: FirstThingWrongCategory = "NONE"
+    evidence_lines: list[int] = Field(default_factory=list)
+    source: Literal[
+        "conversation",
+        "technical",
+        "timeline",
+        "compliance",
+        "metadata",
+        "derived",
+        "none",
+    ] = "conversation"
     reason: str = ""
     review_required: bool = False
+
+
+FirstThingWrongResult = FirstThingWrongCandidate
 
 
 class ConversationQualityResult(StrictModel):
@@ -210,9 +246,16 @@ class ConversationQualityResult(StrictModel):
     context_awareness: ContextAwareness
     conversation_completeness: ConversationCompleteness
     what_happened: WhatHappenedResult = Field(default_factory=WhatHappenedResult)
-    first_thing_wrong_candidate: FirstThingWrongCandidate = Field(
-        default_factory=FirstThingWrongCandidate
+    first_thing_wrong: FirstThingWrongCandidate = Field(
+        default_factory=FirstThingWrongCandidate,
+        validation_alias=AliasChoices(
+            "first_thing_wrong", "first_thing_wrong_candidate"
+        ),
     )
+
+    @property
+    def first_thing_wrong_candidate(self) -> FirstThingWrongCandidate:
+        return self.first_thing_wrong
 
 
 class ComplianceRuleResult(EvidenceResult):

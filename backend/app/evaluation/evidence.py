@@ -181,14 +181,23 @@ def _iter_quality_citations(
             True,
         )
 
-    if result.first_thing_wrong_candidate and result.first_thing_wrong_candidate.line is not None:
+    ftw = getattr(result, "first_thing_wrong", None) or getattr(result, "first_thing_wrong_candidate", None)
+    if ftw and ftw.line is not None and str(ftw.category).upper() not in ("NONE", "UNKNOWN"):
         yield (
-            "first_thing_wrong_candidate",
-            result.first_thing_wrong_candidate.line,
-            result.first_thing_wrong_candidate.quote,
+            "first_thing_wrong",
+            ftw.line,
+            ftw.quote,
             None,
             True,
         )
+        for eline in getattr(ftw, "evidence_lines", []) or []:
+            yield (
+                "first_thing_wrong.evidence_lines",
+                eline,
+                "",
+                None,
+                True,
+            )
 
     if result.what_happened:
         for line in result.what_happened.evidence_lines:

@@ -869,6 +869,33 @@ def test_empty_transcript_does_not_call_llm():
     assert run.summary["overall_assessment"] == "Can't tell"
 
 
+def test_deterministic_evaluation_on_not_answered_makes_no_llm_calls():
+    called = False
+
+    async def structured_caller(_messages, _response_model):
+        nonlocal called
+        called = True
+        raise AssertionError("LLM should not be called when end_reason is not_answered")
+
+    envelope = _batch_interaction()
+    envelope.domain_data = {"end_reason": "not_answered"}
+
+    run = asyncio.run(
+        EvaluatorRegistry(structured_caller=structured_caller).evaluate_batches(
+            envelope,
+            [_batch_turn()],
+        )
+    )
+
+    assert called is False
+    assert len(run.batches) == 3
+    assert all(batch.status == "completed" for batch in run.batches)
+    assert all(batch.parsed_output is not None for batch in run.batches)
+    assert run.summary["overall_assessment"] == "Can't tell"
+    assert run.summary["first_thing_wrong_category"] == "NONE"
+    assert run.review_required is False
+
+
 def test_registry_retries_with_error_context_on_evidence_validation_failure():
     calls = []
 

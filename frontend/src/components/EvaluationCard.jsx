@@ -6,6 +6,7 @@ function collectEvidence(value, path = [], evidence = []) {
     value.forEach((item, index) => collectEvidence(item, [...path, String(index)], evidence));
   } else if (value && typeof value === 'object') {
     const quoteFields = [
+      ['quote', 'line'],
       ['quote', 'evidence_line'],
       ['customer_quote', 'customer_evidence_line'],
       ['agent_quote', 'agent_evidence_line'],
@@ -88,6 +89,35 @@ export default function EvaluationCard({ evaluation, onOpenReview }) {
         <ul className="mt-3 list-disc list-inside space-y-1 text-xs text-amber-800 dark:text-amber-300">
           {evaluation.review_reasons.map((reason, index) => <li key={index}>{reason}</li>)}
         </ul>
+      )}
+
+      {evaluation.parsed_output?.what_happened?.label && (
+        <div className="mt-2 text-xs flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+          <span className="text-slate-500 font-medium">What happened:</span>
+          <span className="font-semibold text-slate-800 dark:text-slate-200">{evaluation.parsed_output.what_happened.label}</span>
+        </div>
+      )}
+
+      {(evaluation.parsed_output?.first_thing_wrong || evaluation.parsed_output?.first_thing_wrong_candidate) && (
+        <div className="mt-2.5 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-500">First thing wrong:</span>
+            <span className={`font-mono font-bold ${
+              (evaluation.parsed_output.first_thing_wrong?.category || evaluation.parsed_output.first_thing_wrong_candidate?.category) === 'NONE'
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-rose-600 dark:text-rose-400'
+            }`}>
+              {evaluation.parsed_output.first_thing_wrong?.category || evaluation.parsed_output.first_thing_wrong_candidate?.category}
+              {(evaluation.parsed_output.first_thing_wrong?.line ?? evaluation.parsed_output.first_thing_wrong_candidate?.line) != null &&
+                ` (Line ${evaluation.parsed_output.first_thing_wrong?.line ?? evaluation.parsed_output.first_thing_wrong_candidate?.line})`}
+            </span>
+          </div>
+          {(evaluation.parsed_output.first_thing_wrong?.description || evaluation.parsed_output.first_thing_wrong_candidate?.description) && (
+            <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
+              {evaluation.parsed_output.first_thing_wrong?.description || evaluation.parsed_output.first_thing_wrong_candidate?.description}
+            </p>
+          )}
+        </div>
       )}
 
       {evaluation.parsed_output && (

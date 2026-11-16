@@ -39,6 +39,73 @@ class FirstFailureSummary:
     critical_failures: list[FailureCandidate] = field(default_factory=list)
 
 
+FIRST_THING_WRONG_ENUMS = {
+    "NO_AGENT_RESPONSE",
+    "LATE_AGENT_RESPONSE",
+    "AGENT_AUDIO_NOT_PLAYED",
+    "AGENT_AUDIO_CUT_OFF",
+    "CUSTOMER_INTERRUPTED_AGENT",
+    "LONG_AGENT_RESPONSE_DELAY",
+    "AGENT_REPEATED_QUESTION",
+    "IGNORED_CUSTOMER_INFORMATION",
+    "IRRELEVANT_AGENT_RESPONSE",
+    "CONTRADICTORY_AGENT_RESPONSE",
+    "POOR_OBJECTION_HANDLING",
+    "POLICY_OR_INSURER_PUSHING",
+    "PREMIUM_FIGURE_DISCLOSURE",
+    "BOOKING_WITHOUT_CONSENT",
+    "SENSITIVE_INFORMATION_REQUEST",
+    "AI_IDENTITY_DENIAL",
+    "INAPPROPRIATE_CLOSING",
+    "OTHER",
+    "NONE",
+    "UNKNOWN",
+}
+
+TECH_FAILURE_MAP = {
+    "NO_AGENT_AUDIO": "NO_AGENT_RESPONSE",
+    "NO_AGENT_AUDIO_PLAYED": "NO_AGENT_RESPONSE",
+    "NO_AGENT_RESPONSE": "NO_AGENT_RESPONSE",
+    "LATE_AGENT_OPENING": "LATE_AGENT_RESPONSE",
+    "LATE_AGENT_RESPONSE": "LATE_AGENT_RESPONSE",
+    "AGENT_PLAYBACK_CUT": "AGENT_AUDIO_CUT_OFF",
+    "AGENT_AUDIO_CUT_OFF": "AGENT_AUDIO_CUT_OFF",
+    "AGENT_LINE_NOT_PLAYED": "AGENT_AUDIO_NOT_PLAYED",
+    "AGENT_AUDIO_NOT_PLAYED": "AGENT_AUDIO_NOT_PLAYED",
+    "LONG_RESPONSE_DELAY": "LONG_AGENT_RESPONSE_DELAY",
+    "LONG_AGENT_RESPONSE_DELAY": "LONG_AGENT_RESPONSE_DELAY",
+}
+
+COMPLIANCE_RULE_MAP = {
+    "NR001": "POLICY_OR_INSURER_PUSHING",
+    "NR002": "PREMIUM_FIGURE_DISCLOSURE",
+    "NR003": "OTHER",
+    "NR004": "BOOKING_WITHOUT_CONSENT",
+    "NR005": "SENSITIVE_INFORMATION_REQUEST",
+    "NR006": "AI_IDENTITY_DENIAL",
+}
+
+CONVERSATIONAL_MAP = {
+    "AGENT_REPEATED_QUESTION": "AGENT_REPEATED_QUESTION",
+    "AGENT_REPETITION": "AGENT_REPEATED_QUESTION",
+    "REPEATED_QUESTION": "AGENT_REPEATED_QUESTION",
+    "IGNORED_CUSTOMER_INFORMATION": "IGNORED_CUSTOMER_INFORMATION",
+    "IGNORED_INFORMATION": "IGNORED_CUSTOMER_INFORMATION",
+    "IRRELEVANT_AGENT_RESPONSE": "IRRELEVANT_AGENT_RESPONSE",
+    "IRRELEVANT_FOLLOWUP": "IRRELEVANT_AGENT_RESPONSE",
+    "CONTRADICTORY_AGENT_RESPONSE": "CONTRADICTORY_AGENT_RESPONSE",
+    "CONTRADICTORY_RESPONSE": "CONTRADICTORY_AGENT_RESPONSE",
+    "POOR_OBJECTION_HANDLING": "POOR_OBJECTION_HANDLING",
+    "INAPPROPRIATE_CLOSING": "INAPPROPRIATE_CLOSING",
+    "CUSTOMER_INTERRUPTED_AGENT": "CUSTOMER_INTERRUPTED_AGENT",
+    "CUSTOMER_INTERRUPTION": "CUSTOMER_INTERRUPTED_AGENT",
+    "INTERRUPTION": "CUSTOMER_INTERRUPTED_AGENT",
+    "NONE": "NONE",
+    "OTHER": "OTHER",
+    "UNKNOWN": "UNKNOWN",
+}
+
+
 @dataclass(frozen=True)
 class EvaluationSummary:
     overall_assessment: Literal["Good", "OK", "Bad", "Can't tell"]
@@ -48,8 +115,13 @@ class EvaluationSummary:
     requires_human_review: bool
     review_reasons: list[str]
     what_happened: str = "Can't tell"
+    first_thing_wrong_category: str = "NONE"
     first_thing_wrong_line: int | None = None
+    first_thing_wrong_description: str | None = None
     first_thing_wrong_what: str | None = None
+    technical_failure_category: str = "NONE"
+    conversational_failure_category: str = "NONE"
+    compliance_failure_category: str = "NONE"
 
 
 def _appointment_rules(rules: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -446,43 +518,140 @@ def derive_evaluation_summary(
         elif ft == "LATE_AGENT_OPENING" and what_happened_label in ("Can't tell", "Call reached an ending"):
             what_happened_label = "Agent's first words came late (over 3s)"
 
-    candidate_data = _as_mapping(quality_data.get("first_thing_wrong_candidate")) or {}
+    # 1. Technical failure candidate
+    tech_candidate: FailureCandidate | None = None
+    technical_failure_category = "NONE"
+    if technical_failures:
+        first_tech = technical_failures[0]
+        raw_ft = getattr(first_tech, "failure_type", "unknown")
+        mapped_tech = TECH_FAILURE_MAP.get(
+            raw_ft,
+            "OTHER" if raw_ft not in ("NONE", "unknown") else "NONE",
+        )
+        technical_failure_category = mapped_tech
+        if mapped_tech != "NONE":
+            tech_candidate = FailureCandidate(
+                category="technical",
+                failure_type=mapped_tech,
+                time_s=getattr(first_tech, "time_s", None),
+                turn_index=getattr(first_tech, "turn_index", None),
+                severity=getattr(first_tech, "severity", "high"),
+                evidence=str(getattr(first_tech, "evidence", "")),
+            )
+
+    # 2. Conversational failure candidate
+    candidate_data = (
+        _as_mapping(quality_data.get("first_thing_wrong"))
+        or _as_mapping(quality_data.get("first_thing_wrong_candidate"))
+        or {}
+    )
+    raw_cat = str(candidate_data.get("category", "NONE")).strip().upper()
     candidate_line = candidate_data.get("line")
-    candidate_cat = candidate_data.get("category", "NONE")
-    if candidate_line is not None and candidate_cat != "NONE":
-        conversational_failures.append(
-            FailureCandidate(
-                category=str(candidate_cat).lower(),
-                failure_type=str(candidate_data.get("description") or candidate_data.get("reason") or "conversational_issue"),
-                turn_index=candidate_line,
-                severity="medium",
-                evidence=str(candidate_data.get("quote", "")),
+    candidate_desc = str(
+        candidate_data.get("description") or candidate_data.get("reason") or ""
+    )
+    candidate_quote = str(candidate_data.get("quote", ""))
+
+    mapped_conv = CONVERSATIONAL_MAP.get(raw_cat)
+    if mapped_conv is None:
+        if raw_cat in FIRST_THING_WRONG_ENUMS:
+            mapped_conv = raw_cat
+        elif raw_cat not in ("NONE", ""):
+            mapped_conv = "OTHER"
+        else:
+            mapped_conv = "NONE"
+
+    # Special treatment for CUSTOMER_INTERRUPTED_AGENT:
+    # only an issue if evidence indicates actual failure
+    if mapped_conv == "CUSTOMER_INTERRUPTED_AGENT":
+        ev_lower = (candidate_desc + " " + candidate_quote).lower()
+        has_issue = any(
+            kw in ev_lower
+            for kw in (
+                "cut",
+                "incomplete",
+                "unplayed",
+                "fail",
+                "broken",
+                "recover",
+                "dropped",
             )
         )
-    compliance_failures = [
-        FailureCandidate(
-            category="compliance",
-            failure_type=rule_id,
-            turn_index=(_as_mapping(rule_value) or {}).get("evidence_line"),
-            severity="critical",
-            evidence=str((_as_mapping(rule_value) or {}).get("reason", "")),
+        if not has_issue:
+            mapped_conv = "NONE"
+
+    conversational_failure_category = mapped_conv
+    conv_candidate: FailureCandidate | None = None
+    if mapped_conv != "NONE":
+        conv_candidate = FailureCandidate(
+            category="conversational",
+            failure_type=mapped_conv,
+            turn_index=candidate_line,
+            severity="medium",
+            evidence=candidate_desc or candidate_quote,
         )
-        for rule_id, rule_value in rule_results.items()
-        if (
-            (_as_mapping(rule_value) or {}).get("status") == "DETECTED"
+
+    # 3. Compliance failure candidate
+    detected_compliance = []
+    for rule_id, rule_value in rule_results.items():
+        mapping = _as_mapping(rule_value) or {}
+        if mapping.get("status") == "DETECTED":
+            ev_line = mapping.get("evidence_line")
+            rule_enum = COMPLIANCE_RULE_MAP.get(rule_id, "OTHER")
+            detected_compliance.append(
+                FailureCandidate(
+                    category="compliance",
+                    failure_type=rule_enum,
+                    turn_index=ev_line,
+                    severity="critical",
+                    evidence=str(mapping.get("reason", "")),
+                )
+            )
+
+    comp_candidate: FailureCandidate | None = None
+    if detected_compliance:
+        earliest_comp = min(
+            detected_compliance,
+            key=lambda c: (c.turn_index if c.turn_index is not None else 999999),
         )
+        compliance_failure_category = earliest_comp.failure_type
+        comp_candidate = earliest_comp
+    else:
+        compliance_failure_category = "NONE"
+
+    # Merge candidates chronologically
+    active_candidates = [
+        c for c in [tech_candidate, conv_candidate, comp_candidate] if c is not None
     ]
-    first_failure = merge_failure_candidates(
-        technical_failures,
-        conversational_failures,
-        compliance_failures,
-    )
-    if timeline_ordering_unknown:
-        first_failure = FirstFailureSummary(
-            "unknown",
-            None,
-            first_failure.critical_failures,
-        )
+    critical_candidates = [
+        c for c in active_candidates if c.severity == "critical"
+    ]
+
+    if not active_candidates:
+        first_failure = FirstFailureSummary("none", None, critical_candidates)
+        first_thing_wrong_category = "NONE"
+        first_thing_wrong_line = None
+        first_thing_wrong_description = "No issue identified."
+    elif timeline_ordering_unknown:
+        first_failure = FirstFailureSummary("unknown", None, critical_candidates)
+        first_thing_wrong_category = "UNKNOWN"
+        first_thing_wrong_line = None
+        first_thing_wrong_description = "Insufficient evidence to identify the first issue."
+    else:
+        ordered = _ordered_candidates(active_candidates)
+        if ordered is None:
+            first_failure = FirstFailureSummary("unknown", None, critical_candidates)
+            first_thing_wrong_category = "UNKNOWN"
+            first_thing_wrong_line = None
+            first_thing_wrong_description = "Insufficient evidence to identify the first issue."
+        else:
+            earliest = ordered[0]
+            first_failure = FirstFailureSummary("known", earliest, critical_candidates)
+            first_thing_wrong_category = earliest.failure_type
+            first_thing_wrong_line = earliest.turn_index
+            first_thing_wrong_description = (
+                earliest.evidence or f"First failure: {earliest.failure_type}"
+            )
 
     outcome = _batch_outcome(understanding, "outcome")
     understanding_data = _as_mapping(understanding) or {}
@@ -513,20 +682,14 @@ def derive_evaluation_summary(
         overall = "Bad"
     elif quality_assessment == "Can't tell":
         overall = "Can't tell"
-        review_reasons.append("Conversation quality is not fully evaluable")
+        completeness = (
+            _as_mapping(quality_data.get("conversation_completeness")) or {}
+        )
+        conv_status = completeness.get("conversation_status")
+        if conv_status not in ("NO_MEANINGFUL_INTERACTION", "MACHINE_OR_VOICEMAIL"):
+            review_reasons.append("Conversation quality is not fully evaluable")
     else:
         overall = quality_assessment
-
-    first_thing_wrong_line = (
-        first_failure.first_failure.turn_index
-        if first_failure.first_failure and first_failure.status == "known"
-        else None
-    )
-    first_thing_wrong_what = (
-        first_failure.first_failure.failure_type
-        if first_failure.first_failure and first_failure.status == "known"
-        else None
-    )
 
     return EvaluationSummary(
         overall_assessment=overall,
@@ -536,6 +699,11 @@ def derive_evaluation_summary(
         requires_human_review=bool(review_reasons or critical_issues),
         review_reasons=review_reasons,
         what_happened=what_happened_label,
+        first_thing_wrong_category=first_thing_wrong_category,
         first_thing_wrong_line=first_thing_wrong_line,
-        first_thing_wrong_what=first_thing_wrong_what,
+        first_thing_wrong_description=first_thing_wrong_description,
+        first_thing_wrong_what=first_thing_wrong_category,
+        technical_failure_category=technical_failure_category,
+        conversational_failure_category=conversational_failure_category,
+        compliance_failure_category=compliance_failure_category,
     )

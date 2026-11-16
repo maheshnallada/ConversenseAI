@@ -262,10 +262,11 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   const understanding = evaluationBatches.find(
     (batch) => batch.batch_name === 'conversation_understanding'
   )?.parsed_output;
-  const overallAssessment = evaluationRun?.summary?.overall_assessment;
-  const conversationStatus = evaluationBatches.find(
+  const quality = evaluationBatches.find(
     (batch) => batch.batch_name === 'conversation_quality'
-  )?.parsed_output?.conversation_completeness?.conversation_status;
+  )?.parsed_output;
+  const overallAssessment = evaluationRun?.summary?.overall_assessment;
+  const conversationStatus = quality?.conversation_completeness?.conversation_status;
   const compliance = evaluationBatches.find(
     (batch) => batch.batch_name === 'compliance_appointment'
   )?.parsed_output?.compliance?.rule_results;
@@ -274,6 +275,16 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   ).length;
   const criticalIssues = evaluationRun?.summary?.critical_issues || [];
   const hasFailedBatches = evaluationBatches.some((batch) => batch.status === 'failed');
+  const whatHappened = evaluationRun?.summary?.what_happened || quality?.what_happened?.label;
+  const firstThingWrongCategory = evaluationRun?.summary?.first_thing_wrong_category
+    || quality?.first_thing_wrong?.category
+    || quality?.first_thing_wrong_candidate?.category;
+  const firstThingWrongLine = evaluationRun?.summary?.first_thing_wrong_line
+    ?? quality?.first_thing_wrong?.line
+    ?? quality?.first_thing_wrong_candidate?.line;
+  const firstThingWrongDesc = evaluationRun?.summary?.first_thing_wrong_description
+    || quality?.first_thing_wrong?.description
+    || quality?.first_thing_wrong_candidate?.description;
   const observabilityMetrics = observabilityData?.metrics;
   const formatMetric = (value, suffix = '') =>
     value == null ? 'Unavailable' : `${value}${suffix}`;
@@ -410,6 +421,35 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
               <span className="font-bold text-slate-800 dark:text-slate-200">{conversationStatus}</span>
             </div>
           )}
+          {whatHappened && (
+            <div
+              className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm"
+              title="What happened in interaction"
+            >
+              <span className="text-slate-500 mr-1.5">What happened:</span>
+              <span className="text-indigo-700 dark:text-indigo-300 font-bold">{whatHappened}</span>
+            </div>
+          )}
+
+          {firstThingWrongCategory && (
+            <div
+              className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm"
+              title={firstThingWrongDesc || `Predicted first failure: ${firstThingWrongCategory}`}
+            >
+              <span className="text-slate-500 mr-1.5">First thing wrong:</span>
+              <span
+                className={`font-mono font-bold ${
+                  firstThingWrongCategory === 'NONE'
+                    ? 'text-emerald-700 dark:text-emerald-300'
+                    : 'text-rose-700 dark:text-rose-300'
+                }`}
+              >
+                {firstThingWrongCategory}
+                {firstThingWrongLine != null ? ` (Line ${firstThingWrongLine})` : ''}
+              </span>
+            </div>
+          )}
+
           {compliance && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
               <span className="text-slate-500 mr-1.5">Detected compliance issues:</span>
