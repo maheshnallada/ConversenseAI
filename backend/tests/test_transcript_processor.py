@@ -69,3 +69,57 @@ def test_process_call_13_silent_call():
     # call_13 has 0 messages
     assert len(turns) == 0
 
+
+def test_process_folder_keeps_unsupported_roles_unknown_and_preserves_raw_text(
+    tmp_path: Path,
+):
+    call_folder = tmp_path / "synthetic_call"
+    call_folder.mkdir()
+    (call_folder / "call.json").write_text(
+        """{
+            "call_id": "transcript-call",
+            "messages": [
+                {"role": "assistant", "content": "  Hello \\n there ", "t": 0.0},
+                {"role": "user", "content": "I said: yes.", "t": 1.0},
+                {"role": "tool", "content": "Tool output", "t": 2.0}
+            ]
+        }""",
+        encoding="utf-8",
+    )
+
+    turns = TranscriptProcessor().process_folder(call_folder, "tenant_test")
+
+    assert [turn.speaker for turn in turns] == ["agent", "customer", "unknown"]
+    assert [turn.raw_text for turn in turns] == [
+        "  Hello \n there ",
+        "I said: yes.",
+        "Tool output",
+    ]
+    assert turns[0].normalized_text == "hello there"
+
+
+def test_process_folder_keeps_missing_and_malformed_timing_unknown(tmp_path: Path):
+    call_folder = tmp_path / "synthetic_call"
+    call_folder.mkdir()
+    (call_folder / "call.json").write_text(
+        """{
+            "call_id": "transcript-call",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "Uncertain timing",
+                    "t": "not-a-number",
+                    "metadata": {"audio_s": "not-a-number"}
+                },
+                {"role": "user", "content": "No timestamp"}
+            ]
+        }""",
+        encoding="utf-8",
+    )
+
+    turns = TranscriptProcessor().process_folder(call_folder, "tenant_test")
+
+    assert [turn.start_s for turn in turns] == [None, None]
+    assert [turn.end_s for turn in turns] == [None, None]
+    assert turns[0].raw_text == "Uncertain timing"
+

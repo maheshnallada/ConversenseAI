@@ -1,4 +1,5 @@
 {
+  "version": "2026-11-14",
   "currency": "USD",
   "rates": {
     "llm": {
@@ -13,6 +14,9 @@
     },
     "stt": {
       "pulse": {
+        "per_minute": 0.006
+      },
+      "smallest": {
         "per_minute": 0.006
       }
     },
@@ -36,4 +40,3 @@
     "model": "gemini-3.5-flash-lite"
   }
 }
-

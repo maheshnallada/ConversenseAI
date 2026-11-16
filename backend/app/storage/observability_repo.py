@@ -26,6 +26,8 @@ def aggregate_cost_rows(rows: list[ObservabilityMetricsRow]) -> tuple[float | No
         currency: round(total, 4)
         for currency, total in cost_by_currency.items()
     }
+    if rows and any(row.total_cost is None for row in rows):
+        return None, None, cost_by_currency
     if len(cost_by_currency) == 1 and "UNKNOWN" not in cost_by_currency:
         currency, total = next(iter(cost_by_currency.items()))
         return total, currency, cost_by_currency
@@ -41,6 +43,8 @@ class ObservabilityRepository:
         metrics_dict = {
             "tenant_id": metrics.tenant_id,
             "interaction_id": metrics.interaction_id,
+            "calculation_version": metrics.calculation_version,
+            "rate_card_version": metrics.rate_card_version,
             "recording_duration_s": metrics.recording_duration_s,
             "telephony_duration_s": metrics.telephony_duration_s,
             "turn_count": metrics.turn_count,
@@ -60,6 +64,39 @@ class ObservabilityRepository:
             "output_tokens": metrics.output_tokens,
             "total_tokens": metrics.total_tokens,
             "cost_breakdown": asdict(metrics.cost_breakdown),
+            "playback_status_counts": metrics.playback_status_counts,
+            "playback_mismatches": metrics.playback_mismatches,
+            "playback_review_required": metrics.playback_review_required,
+            "timestamp_quality": metrics.timestamp_quality,
+            "timed_turn_count": metrics.timed_turn_count,
+            "timestamp_missing_turn_count": metrics.timestamp_missing_turn_count,
+            "timestamp_invalid_turn_count": metrics.timestamp_invalid_turn_count,
+            "unknown_speaker_turn_count": metrics.unknown_speaker_turn_count,
+            "event_types": metrics.event_types,
+            "units": {
+                "durations": "seconds",
+                "response_latency": "seconds",
+                "counts": "count",
+                "cost": metrics.cost_breakdown.currency,
+                "tokens": "tokens",
+            },
+            "availability": {
+                "recording_duration": metrics.recording_duration_s is not None,
+                "telephony_duration": metrics.telephony_duration_s is not None,
+                "response_latency": bool(metrics.response_latency_samples),
+                "playback": bool(metrics.playback_status_counts),
+                "provider_usage": (
+                    metrics.input_tokens is not None
+                    and metrics.output_tokens is not None
+                ),
+                "estimated_cost": metrics.cost_breakdown.total_cost is not None,
+                "rate_card": metrics.rate_card_version is not None,
+            },
+            "source_evidence": {
+                "events": metrics.event_types,
+                "turn_count": metrics.turn_count,
+                "timestamp_quality": metrics.timestamp_quality,
+            },
         }
 
         with self.session_factory() as session:
@@ -128,14 +165,29 @@ class ObservabilityRepository:
                 longest_silence_s=data.get("longest_silence_s"),
                 overlap_count=data.get("overlap_count", 0),
                 total_overlap_s=data.get("total_overlap_s", 0.0),
-                audio_missing=data.get("audio_missing", False),
-                audio_silent=data.get("audio_silent", False),
+                audio_missing=data.get("audio_missing"),
+                audio_silent=data.get("audio_silent"),
                 llm_provider=data.get("llm_provider"),
                 llm_model=data.get("llm_model"),
                 input_tokens=data.get("input_tokens"),
                 output_tokens=data.get("output_tokens"),
                 total_tokens=data.get("total_tokens"),
                 cost_breakdown=CostBreakdown(**cost_data),
+                calculation_version=data.get("calculation_version", "1.0"),
+                rate_card_version=data.get("rate_card_version"),
+                playback_status_counts=data.get("playback_status_counts", {}),
+                playback_mismatches=data.get("playback_mismatches", []),
+                playback_review_required=data.get("playback_review_required", False),
+                timestamp_quality=data.get("timestamp_quality", "unknown"),
+                timed_turn_count=data.get("timed_turn_count", 0),
+                timestamp_missing_turn_count=data.get(
+                    "timestamp_missing_turn_count", 0
+                ),
+                timestamp_invalid_turn_count=data.get(
+                    "timestamp_invalid_turn_count", 0
+                ),
+                unknown_speaker_turn_count=data.get("unknown_speaker_turn_count", 0),
+                event_types=data.get("event_types", []),
             )
 
     def get_platform_summary(self, tenant_id: str) -> PlatformObservabilitySummary:

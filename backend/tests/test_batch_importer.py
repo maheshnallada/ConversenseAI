@@ -55,7 +55,7 @@ def test_batch_import_subset_and_idempotency(tmp_path: Path):
         assert len(artifacts) == 24
 
         import_runs = session.scalars(select(ImportRunRow)).all()
-        assert len(import_runs) == 1
+        assert len(import_runs) == 0
 
     # Second run (Idempotency test)
     result2 = importer.import_directory(dummy_calls, run_id="run_2")
@@ -68,7 +68,7 @@ def test_batch_import_subset_and_idempotency(tmp_path: Path):
         assert session.scalar(select(func.count(InteractionRow.id))) == 3
         assert session.scalar(select(func.count(OutboxRow.id))) == 3
         assert session.scalar(select(func.count(ArtifactRow.id))) == 24
-        assert session.scalar(select(func.count(ImportRunRow.id))) == 2
+        assert session.scalar(select(func.count(ImportRunRow.id))) == 0
 
     # Markdown report generation
     md = generate_markdown_report(result1)

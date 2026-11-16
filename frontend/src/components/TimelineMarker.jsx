@@ -3,7 +3,9 @@ import { Scissors, Clock, Play } from 'lucide-react';
 
 export default function TimelineMarker({ event, onSeek }) {
   const isInterruption = event.event_type === 'interruption';
-  const duration = event.duration_s ? event.duration_s.toFixed(1) : '0.0';
+  const duration = event.duration_s == null
+    ? 'Unavailable'
+    : event.duration_s.toFixed(1);
   const interrupter = event.metadata?.interrupter || event.speaker || 'party';
 
   if (isInterruption) {

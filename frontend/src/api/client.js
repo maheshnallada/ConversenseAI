@@ -2,6 +2,40 @@
 
 const BASE_URL = '/api/v1';
 
+/**
+ * @typedef {Object} BenchmarkReport
+ * @property {number} total_interactions
+ * @property {Object} dimension_metrics
+ * @property {Object} confusion_matrices
+ * @property {number} compliance_false_negatives
+ * @property {number} compliance_false_positives
+ * @property {number} abstention_rate
+ * @property {string} summary_notes
+ * @property {Object} details
+ */
+
+/**
+ * @typedef {Object} GoldenRecordResult
+ * @property {string} call_id
+ * @property {'ready' | 'failed' | 'excluded'} evaluation_status
+ * @property {string | null} evaluation_run_id
+ * @property {boolean} reused
+ * @property {string | null} error
+ */
+
+/**
+ * @typedef {Object} GoldenBenchmarkImportResult
+ * @property {string} dataset_hash
+ * @property {number} records_seen
+ * @property {number} labels_imported
+ * @property {number} test_records_excluded
+ * @property {number} evaluations_created
+ * @property {number} evaluations_reused
+ * @property {number} evaluations_failed
+ * @property {GoldenRecordResult[]} records
+ * @property {BenchmarkReport} report
+ */
+
 async function request(endpoint, options = {}) {
   const url = `${BASE_URL}${endpoint}`;
   const headers = {
@@ -38,26 +72,65 @@ export const api = {
   getOverview: (tenant = 'health_campaign') =>
     request('/analytics/overview', { headers: { 'X-Tenant-Id': tenant } }),
 
-  getQuality: (tenant = 'health_campaign') =>
-    request('/analytics/quality', { headers: { 'X-Tenant-Id': tenant } }),
+  getReliability: (tenant = 'health_campaign') =>
+    request('/analytics/reliability', { headers: { 'X-Tenant-Id': tenant } }),
 
-  getCost: (tenant = 'health_campaign') =>
-    request('/analytics/cost', { headers: { 'X-Tenant-Id': tenant } }),
+  getUsage: (tenant = 'health_campaign') =>
+    request('/analytics/usage', { headers: { 'X-Tenant-Id': tenant } }),
 
   // Interactions
-  getInteractionsList: (tenant = 'health_campaign') =>
-    request('/interactions-list', { headers: { 'X-Tenant-Id': tenant } }),
-
   getInteractionsPage: (params = {}, tenant = 'health_campaign') => {
     const q = new URLSearchParams(params).toString();
     return request(`/interactions?${q}`, { headers: { 'X-Tenant-Id': tenant } });
   },
 
+  // Call imports
+  getStagedCallFolders: (tenant = 'health_campaign') =>
+    request('/imports/staged-calls', {
+      headers: { 'X-Tenant-Id': tenant },
+    }),
+
+  importStagedCallFolders: (folderIds, tenant = 'health_campaign') =>
+    request('/imports/staged-calls', {
+      method: 'POST',
+      headers: { 'X-Tenant-Id': tenant },
+      body: JSON.stringify({ folder_ids: folderIds }),
+    }),
+
+  importCallFolderFiles: (files, tenant = 'health_campaign') => {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append(
+        'files',
+        file,
+        file.webkitRelativePath || file.name,
+      );
+    }
+    return request('/imports/upload-calls', {
+      method: 'POST',
+      headers: { 'X-Tenant-Id': tenant },
+      body: formData,
+    });
+  },
+
   getInteraction: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}`, { headers: { 'X-Tenant-Id': tenant } }),
 
-  getTimeline: (id, tenant = 'health_campaign') =>
-    request(`/interactions/${encodeURIComponent(id)}/timeline`, { headers: { 'X-Tenant-Id': tenant } }),
+  getObservability: (id, tenant = 'health_campaign') =>
+    request(`/interactions/${encodeURIComponent(id)}/observability`, {
+      headers: { 'X-Tenant-Id': tenant },
+    }),
+
+  getTimeline: async (id, tenant = 'health_campaign') => {
+    try {
+      return await request(`/interactions/${encodeURIComponent(id)}/timeline`, {
+        headers: { 'X-Tenant-Id': tenant },
+      });
+    } catch (error) {
+      if (error.status === 404) return null;
+      throw error;
+    }
+  },
 
   getEvaluations: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/evaluations`, { headers: { 'X-Tenant-Id': tenant } }),
@@ -95,37 +168,12 @@ export const api = {
   listReviews: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/reviews`, { headers: { 'X-Tenant-Id': tenant } }),
 
-  // Ingestion
-  uploadZip: async (file, tenant = 'health_campaign') => {
-    const res = await fetch(`${BASE_URL}/interactions/upload-zip`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/zip', 'X-Tenant-Id': tenant },
-      body: file,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.message || 'Upload failed');
-    }
-    return res.json();
-  },
-
-  processPath: (path, tenant = 'health_campaign') =>
-    request('/interactions/process-and-evaluate', {
-      method: 'POST',
-      headers: { 'X-Tenant-Id': tenant },
-      body: JSON.stringify({ call_folder_path: path, tenant_id: tenant }),
-    }),
-
-  seedAll: (limit = 50, tenant = 'health_campaign') =>
-    request(`/interactions/seed-all?limit=${limit}`, {
-      method: 'POST',
-      headers: { 'X-Tenant-Id': tenant },
-    }),
-
-  // Benchmark & Evaluators
+  // Benchmark
+  /** @returns {Promise<BenchmarkReport>} */
   getBenchmark: (tenant = 'health_campaign') =>
     request('/golden-dataset/benchmark', { headers: { 'X-Tenant-Id': tenant } }),
 
+  /** @returns {Promise<GoldenBenchmarkImportResult>} */
   importGolden: (csvPath = null, tenant = 'health_campaign') =>
     request('/golden-dataset/import', {
       method: 'POST',
@@ -133,9 +181,4 @@ export const api = {
       body: csvPath ? JSON.stringify({ csv_path: csvPath }) : undefined,
     }),
 
-  getEvaluators: () =>
-    request('/evaluators'),
-
-  getUseCases: () =>
-    request('/use-cases'),
 };

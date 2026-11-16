@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 
-from app.api.app import ProcessFolderRequest, create_app
+from app.api.app import create_app
 from app.storage.db import create_session_factory, init_db
 
 
@@ -25,14 +25,6 @@ def _body():
         "interaction_type": "voice",
         "execution": {"input_tokens": 0, "output_tokens": 3, "cost": None},
     }
-
-
-def test_process_folder_request_default_reads_environment_tenant(monkeypatch):
-    monkeypatch.setenv("TENANT_ID", "tenant_from_env")
-
-    request = ProcessFolderRequest(call_folder_path="call-folder")
-
-    assert request.tenant_id == "tenant_from_env"
 
 
 def test_post_then_get_round_trip():
@@ -85,7 +77,6 @@ def test_missing_tenant_header_is_rejected():
     [
         ("POST", "/api/v1/interactions", _body()),
         ("GET", "/api/v1/interactions/interaction_001", None),
-        ("GET", "/api/v1/interactions-list", None),
         ("GET", "/api/v1/interactions", None),
         ("GET", "/api/v1/interactions/interaction_001/timeline", None),
         ("GET", "/api/v1/interactions/interaction_001/audio", None),
@@ -102,16 +93,6 @@ def test_missing_tenant_header_is_rejected():
         ),
         ("GET", "/api/v1/interactions/interaction_001/reviews", None),
         ("GET", "/api/v1/analytics/overview", None),
-        ("GET", "/api/v1/analytics/quality", None),
-        ("GET", "/api/v1/analytics/cost", None),
-        (
-            "POST",
-            "/api/v1/interactions/process-and-evaluate",
-            {"call_folder_path": "missing-call-folder"},
-        ),
-        ("POST", "/api/v1/interactions/upload-zip", None),
-        ("POST", "/api/v1/interactions/upload-files", {"call_json": "{}"}),
-        ("POST", "/api/v1/interactions/seed-all", None),
     ],
 )
 @pytest.mark.parametrize("tenant_header", [None, ""])
@@ -134,16 +115,53 @@ def test_tenant_header_must_match_body():
     assert response.status_code == 403
 
 
-def test_process_and_evaluate_rejects_body_tenant_that_conflicts_with_header():
+def test_legacy_local_ingestion_and_superseded_analytics_routes_are_removed():
     client = _client()
+    routes = {
+        (method, route.path)
+        for route in client.app.routes
+        for method in (getattr(route, "methods", None) or set())
+    }
+    headers = {"X-Tenant-Id": "tenant_001"}
+    for method, path, expected_status in (
+        ("POST", "/api/v1/interactions/process-and-evaluate", 405),
+        ("POST", "/api/v1/interactions/upload-zip", 405),
+        ("POST", "/api/v1/interactions/upload-files", 405),
+        ("POST", "/api/v1/interactions/seed-all", 405),
+        ("GET", "/api/v1/interactions-list", 404),
+        ("GET", "/api/v1/analytics/quality", 404),
+        ("GET", "/api/v1/analytics/cost", 404),
+        ("GET", "/api/v1/use-cases", 404),
+    ):
+        assert (method, path) not in routes
+        response = client.request(method, path, headers=headers)
+        assert response.status_code == expected_status, f"{method} {path} should be unavailable"
 
-    response = client.post(
-        "/api/v1/interactions/process-and-evaluate",
-        headers={"X-Tenant-Id": "tenant_002"},
-        json={"call_folder_path": "missing-call-folder", "tenant_id": "tenant_001"},
+
+def test_canonical_interaction_and_benchmark_routes_remain_available():
+    app = create_app(
+        create_session_factory(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
     )
+    routes = {
+        (method, route.path)
+        for route in app.routes
+        for method in (getattr(route, "methods", None) or set())
+    }
 
-    assert response.status_code == 403
+    assert ("POST", "/api/v1/interactions") in routes
+    assert ("GET", "/api/v1/interactions") in routes
+    assert ("GET", "/api/v1/interactions/{interaction_id}") in routes
+    assert ("GET", "/api/v1/interactions/{interaction_id}/observability") in routes
+    assert ("GET", "/api/v1/interactions/{interaction_id}/reviews") in routes
+    assert ("POST", "/api/v1/interactions/{interaction_id}/artifacts") in routes
+    assert ("GET", "/api/v1/golden-dataset/benchmark") in routes
+    assert ("GET", "/api/v1/imports/staged-calls") in routes
+    assert ("POST", "/api/v1/imports/staged-calls") in routes
+    assert ("POST", "/api/v1/imports/upload-calls") in routes
 
 
 def test_other_tenant_gets_404():

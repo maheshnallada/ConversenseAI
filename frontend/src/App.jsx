@@ -5,9 +5,8 @@ import Topbar from './components/Topbar';
 import OverviewView from './views/OverviewView';
 import InteractionsView from './views/InteractionsView';
 import DrillDownView from './views/DrillDownView';
-import IngestView from './views/IngestView';
 import BenchmarkView from './views/BenchmarkView';
-import EvaluatorsView from './views/EvaluatorsView';
+import CallImportView from './views/CallImportView';
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -59,7 +58,6 @@ function AppContent() {
         <Topbar
           activeTab={activeTab}
           onRefresh={handleRefresh}
-          onIngestClick={() => setActiveTab('ingest')}
           onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
           isRefreshing={isRefreshing}
         />
@@ -79,11 +77,10 @@ function AppContent() {
                 onSelectCallId={setSelectedCallId}
               />
             )}
-            {activeTab === 'ingest' && (
-              <IngestView onNavigateToDrillDown={handleInspectCall} />
-            )}
             {activeTab === 'benchmark' && <BenchmarkView />}
-            {activeTab === 'evaluators' && <EvaluatorsView />}
+            {activeTab === 'import-calls' && (
+              <CallImportView onInspectCall={handleInspectCall} />
+            )}
           </div>
         </main>
       </div>

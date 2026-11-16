@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 
-from app.domain.timeline import ReconstructedTimeline, TimelineEvent
+from app.domain.timeline import (
+    ReconstructedTimeline,
+    TimelineEvent,
+    TimelineReconciliation,
+)
 from app.reconstruction.failures import FailureCategory, FailureRecord
 from app.storage.orm import InteractionTimelineRow
 
@@ -24,6 +28,16 @@ class TimelineRepository:
             "overlap_count": timeline.overlap_count,
             "total_overlap_s": timeline.total_overlap_s,
             "events": [asdict(e) for e in timeline.events],
+            "reconciliation": (
+                asdict(timeline.reconciliation) if timeline.reconciliation else None
+            ),
+            "technical_failure_ordering_unknown": (
+                timeline.technical_failure_ordering_unknown
+            ),
+            "conversational_failure_ordering_unknown": (
+                timeline.conversational_failure_ordering_unknown
+            ),
+            "failures": [asdict(failure) for failure in timeline.failures],
             "first_technical_failure": (
                 asdict(timeline.first_technical_failure)
                 if timeline.first_technical_failure
@@ -50,7 +64,7 @@ class TimelineRepository:
             row = InteractionTimelineRow(
                 tenant_id=timeline.tenant_id,
                 interaction_id=timeline.interaction_id,
-                total_duration_s=timeline.total_duration_s,
+                total_duration_s=timeline.total_duration_s or 0.0,
                 agent_turn_count=timeline.agent_turn_count,
                 customer_turn_count=timeline.customer_turn_count,
                 overlap_count=timeline.overlap_count,
@@ -106,6 +120,22 @@ class TimelineRepository:
                 if first_conv_data
                 else None
             )
+            failures = [
+                FailureRecord(
+                    failure_type=failure["failure_type"],
+                    category=FailureCategory(failure["category"]),
+                    turn_index=failure["turn_index"],
+                    time_s=failure["time_s"],
+                    evidence=failure["evidence"],
+                )
+                for failure in data.get("failures", [])
+            ]
+            reconciliation_data = data.get("reconciliation")
+            reconciliation = (
+                TimelineReconciliation(**reconciliation_data)
+                if reconciliation_data
+                else None
+            )
 
             return ReconstructedTimeline(
                 tenant_id=data["tenant_id"],
@@ -118,5 +148,13 @@ class TimelineRepository:
                 events=events,
                 first_technical_failure=first_tech,
                 first_conversational_failure=first_conv,
+                reconciliation=reconciliation,
+                technical_failure_ordering_unknown=data.get(
+                    "technical_failure_ordering_unknown", False
+                ),
+                conversational_failure_ordering_unknown=data.get(
+                    "conversational_failure_ordering_unknown", False
+                ),
+                failures=failures,
             )
 

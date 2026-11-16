@@ -25,6 +25,8 @@ def test_golden_call_label_save_and_retrieve(repo):
         first_thing_wrong_what="Agent line was cut.",
         never_rule_broken="None",
         reviewer_notes="Customer said no multiple times.",
+        conversation_status="COMPLETED",
+        language_slice="hi-en",
     )
 
     repo.save_label(label)
@@ -37,6 +39,8 @@ def test_golden_call_label_save_and_retrieve(repo):
     assert retrieved.what_happened == "Call reached an ending"
     assert retrieved.first_thing_wrong_line == 3
     assert retrieved.never_rule_broken == "None"
+    assert retrieved.conversation_status == "COMPLETED"
+    assert retrieved.language_slice == "hi-en"
 
 def test_golden_dataset_save_many_and_get_all(repo):
     l1 = GoldenCallLabel(
@@ -66,6 +70,31 @@ def test_golden_dataset_save_many_and_get_all(repo):
 
     assert "call_test_m1" in call_ids
     assert "call_test_m2" in call_ids
+
+
+def test_save_many_updates_labels_for_an_existing_call_id(repo):
+    repo.save_label(
+        GoldenCallLabel(
+            call_id="call_test_label_update",
+            what_happened="Original description",
+            correct_outcome="Not interested",
+        )
+    )
+
+    repo.save_many(
+        [
+            GoldenCallLabel(
+                call_id="call_test_label_update",
+                what_happened="Corrected description",
+                correct_outcome="Expert call booked",
+            )
+        ]
+    )
+
+    saved = repo.get_by_call_id("call_test_label_update")
+    assert saved is not None
+    assert saved.what_happened == "Corrected description"
+    assert saved.correct_outcome == "Expert call booked"
 
 
 def test_save_many_rolls_back_entire_batch_on_invalid_label(repo):

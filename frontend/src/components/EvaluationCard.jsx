@@ -1,170 +1,177 @@
 import React, { useState } from 'react';
-import { ShieldCheck, AlertTriangle, XCircle, HelpCircle, ChevronDown, ChevronUp, UserCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, HelpCircle } from 'lucide-react';
 
-export default function EvaluationCard({ evaluation, onOpenReview, onSeek }) {
+function collectEvidence(value, path = [], evidence = []) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectEvidence(item, [...path, String(index)], evidence));
+  } else if (value && typeof value === 'object') {
+    const quoteFields = [
+      ['quote', 'line'],
+      ['quote', 'evidence_line'],
+      ['customer_quote', 'customer_evidence_line'],
+      ['agent_quote', 'agent_evidence_line'],
+      ['consent_quote', 'consent_evidence_line'],
+      ['agent_proposal_quote', 'agent_proposal_line'],
+    ];
+    for (const [quoteKey, lineKey] of quoteFields) {
+      if (typeof value[quoteKey] === 'string' && value[quoteKey] && value[lineKey]) {
+        evidence.push({
+          line: value[lineKey],
+          quote: value[quoteKey],
+          reason: value.reason,
+          field: path.join('.'),
+        });
+      }
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      collectEvidence(child, [...path, key], evidence);
+    }
+  }
+  return evidence;
+}
+
+export default function EvaluationCard({ evaluation, onOpenReview }) {
   const [expanded, setExpanded] = useState(false);
-
-  const status = (evaluation.review_status || 'PASSED').toUpperCase();
-  const score = evaluation.score !== null && evaluation.score !== undefined ? evaluation.score : null;
-  const confidence = evaluation.confidence !== null && evaluation.confidence !== undefined ? evaluation.confidence : null;
-
-  const getStatusBadge = () => {
-    if (status === 'PASSED') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-400 dark:border-emerald-500/30">
-          <ShieldCheck className="w-3.5 h-3.5" /> PASSED
-        </span>
-      );
-    }
-    if (status === 'FLAGGED_FOR_REVIEW') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/80 dark:text-rose-400 dark:border-rose-500/40 animate-pulse">
-          <AlertTriangle className="w-3.5 h-3.5" /> FLAGGED
-        </span>
-      );
-    }
-    if (status === 'FAILED') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-300 dark:bg-rose-950 dark:text-rose-400 dark:border-rose-600">
-          <XCircle className="w-3.5 h-3.5" /> FAILED
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/80 dark:text-amber-400 dark:border-amber-500/30">
-        <HelpCircle className="w-3.5 h-3.5" /> {status}
-      </span>
-    );
-  };
-
-  const getFamilyBadge = (fam) => {
-    return (
-      <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700/60 font-semibold">
-        {fam || 'general'}
-      </span>
-    );
-  };
+  const status = (evaluation.status || 'unknown').toUpperCase();
+  const validation = evaluation.validation || {};
+  const evidence = collectEvidence(evaluation.parsed_output);
+  const statusIcon = status === 'COMPLETED'
+    ? <CheckCircle className="w-3.5 h-3.5" />
+    : status === 'FAILED'
+      ? <AlertTriangle className="w-3.5 h-3.5" />
+      : <HelpCircle className="w-3.5 h-3.5" />;
+  const statusStyle = status === 'COMPLETED'
+    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-400 dark:border-emerald-500/30'
+    : status === 'FAILED'
+      ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/80 dark:text-rose-400 dark:border-rose-500/30'
+      : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/80 dark:text-amber-400 dark:border-amber-500/30';
 
   return (
-    <div className={`p-4 rounded-2xl border transition-all shadow-sm dark:shadow-none ${
-      status === 'FLAGGED_FOR_REVIEW' || status === 'FAILED'
-        ? 'bg-rose-50/40 dark:bg-rose-950/10 border-rose-200 dark:border-rose-900/40 hover:border-rose-300 dark:hover:border-rose-700/60'
-        : 'bg-white dark:bg-slate-900/50 border-slate-200 dark:border-slate-800/80 hover:border-slate-300 dark:hover:border-slate-700'
+    <article className={`p-4 rounded-2xl border shadow-sm dark:shadow-none ${
+      status === 'FAILED' || evaluation.review_required
+        ? 'bg-rose-50/40 dark:bg-rose-950/10 border-rose-200 dark:border-rose-900/40'
+        : 'bg-white dark:bg-slate-900/50 border-slate-200 dark:border-slate-800/80'
     }`}>
-      {/* Top Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2 flex-wrap mb-1">
-            <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100 font-mono tracking-tight">
-              {evaluation.evaluator_id}
-            </h4>
-            {getFamilyBadge(evaluation.family)}
-            {evaluation.method && (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-50 dark:bg-cyan-950/40 text-cyan-700 dark:text-cyan-400 border border-cyan-200 dark:border-cyan-800/30 font-semibold">
-                {evaluation.method}
-              </span>
-            )}
-          </div>
-          {evaluation.label && (
-            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-              Label: <span className="text-slate-800 dark:text-slate-200 font-semibold">{evaluation.label}</span>
-            </p>
-          )}
+          <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+            {evaluation.batch_name.replace(/_/g, ' ')}
+          </h4>
+          <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+            Model: {evaluation.model} | Schema {evaluation.schema_version} | Prompt {evaluation.prompt_version}
+          </p>
         </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          {getStatusBadge()}
-        </div>
+        <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusStyle}`}>
+          {statusIcon} {status}
+        </span>
       </div>
 
-      {/* Score & Confidence Metric row */}
-      <div className="flex items-center gap-4 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/60 text-xs">
-        {score !== null && (
-          <div className="flex items-center gap-1.5 font-mono">
-            <span className="text-slate-500">Score:</span>
-            <span className={`font-semibold ${score >= 0.8 ? 'text-emerald-600 dark:text-emerald-400' : score >= 0.5 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}`}>
-              {(score * 100).toFixed(0)}%
-            </span>
-          </div>
-        )}
-        {confidence !== null && (
-          <div className="flex items-center gap-1.5 font-mono">
-            <span className="text-slate-500">Confidence:</span>
-            <span className="text-cyan-600 dark:text-cyan-400 font-semibold">{(confidence * 100).toFixed(0)}%</span>
-          </div>
-        )}
-        {evaluation.severity && (
-          <div className="flex items-center gap-1.5 font-mono">
-            <span className="text-slate-500">Severity:</span>
-            <span className="text-slate-700 dark:text-slate-300 capitalize font-medium">{evaluation.severity}</span>
-          </div>
-        )}
+      <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+        <span className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+          Review: {evaluation.review_status}
+        </span>
+        <span className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+          Schema: {validation.schema_valid ? 'Valid' : 'Invalid'}
+        </span>
+        <span className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+          Evidence: {validation.evidence_valid ? 'Valid' : 'Invalid'}
+        </span>
       </div>
 
-      {/* Reason / Explanation */}
-      {evaluation.reason && (
-        <p className="mt-2.5 text-xs text-slate-700 dark:text-slate-300 leading-relaxed bg-slate-50 dark:bg-slate-950/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800/60 font-sans">
-          {evaluation.reason}
+      {evaluation.error_message && (
+        <p className="mt-3 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-xs text-rose-700 dark:text-rose-300">
+          {evaluation.error_type}: {evaluation.error_message}
         </p>
       )}
 
-      {/* Quoted Evidence toggle */}
-      {evaluation.evidence && evaluation.evidence.length > 0 && (
-        <div className="mt-3">
+      {evaluation.review_reasons?.length > 0 && (
+        <ul className="mt-3 list-disc list-inside space-y-1 text-xs text-amber-800 dark:text-amber-300">
+          {evaluation.review_reasons.map((reason, index) => <li key={index}>{reason}</li>)}
+        </ul>
+      )}
+
+      {evaluation.parsed_output?.what_happened?.label && (
+        <div className="mt-2 text-xs flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+          <span className="text-slate-500 font-medium">What happened:</span>
+          <span className="font-semibold text-slate-800 dark:text-slate-200">{evaluation.parsed_output.what_happened.label}</span>
+        </div>
+      )}
+
+      {(evaluation.parsed_output?.first_thing_wrong || evaluation.parsed_output?.first_thing_wrong_candidate) && (
+        <div className="mt-2.5 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-500">First thing wrong:</span>
+            <span className={`font-mono font-bold ${
+              (evaluation.parsed_output.first_thing_wrong?.category || evaluation.parsed_output.first_thing_wrong_candidate?.category) === 'NONE'
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-rose-600 dark:text-rose-400'
+            }`}>
+              {evaluation.parsed_output.first_thing_wrong?.category || evaluation.parsed_output.first_thing_wrong_candidate?.category}
+              {(evaluation.parsed_output.first_thing_wrong?.line ?? evaluation.parsed_output.first_thing_wrong_candidate?.line) != null &&
+                ` (Line ${evaluation.parsed_output.first_thing_wrong?.line ?? evaluation.parsed_output.first_thing_wrong_candidate?.line})`}
+            </span>
+          </div>
+          {(evaluation.parsed_output.first_thing_wrong?.description || evaluation.parsed_output.first_thing_wrong_candidate?.description) && (
+            <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
+              {evaluation.parsed_output.first_thing_wrong?.description || evaluation.parsed_output.first_thing_wrong_candidate?.description}
+            </p>
+          )}
+        </div>
+      )}
+
+      {evaluation.parsed_output && (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-xs font-semibold text-slate-600 dark:text-slate-300">
+            Structured result
+          </summary>
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 dark:bg-slate-950 p-3 text-[11px] text-slate-700 dark:text-slate-300">
+            {JSON.stringify(evaluation.parsed_output, null, 2)}
+          </pre>
+        </details>
+      )}
+
+      {evidence.length > 0 && (
+        <div className="mt-3 border-t border-slate-200 dark:border-slate-800 pt-3">
           <button
+            type="button"
             onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1 text-xs text-cyan-600 dark:text-cyan-400 hover:text-cyan-700 dark:hover:text-cyan-300 font-mono transition-colors font-medium"
+            className="flex items-center gap-1 text-xs font-semibold text-cyan-700 dark:text-cyan-400"
           >
             {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-            {expanded ? 'Hide Evidence Snippets' : `View ${evaluation.evidence.length} Evidence Snippet(s)`}
+            {expanded ? 'Hide exact transcript evidence' : `View ${evidence.length} exact transcript quote(s)`}
           </button>
-
           {expanded && (
             <div className="mt-2 space-y-2">
-              {evaluation.evidence.map((ev, i) => (
-                <div key={i} className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 text-xs font-mono shadow-sm dark:shadow-none">
-                  {ev.timestamp_s !== null && ev.timestamp_s !== undefined && (
-                    <button
-                      type="button"
-                      onClick={() => onSeek && onSeek(ev.timestamp_s)}
-                      className="inline-flex items-center gap-1 text-[10px] text-cyan-700 dark:text-cyan-400 bg-cyan-100/70 hover:bg-cyan-200 dark:bg-cyan-950/70 dark:hover:bg-cyan-900 px-2 py-0.5 rounded border border-cyan-300 dark:border-cyan-800/50 mr-2 transition-colors cursor-pointer group font-semibold"
-                      title="Jump audio to this evidence"
-                    >
-                      <span>@ {ev.timestamp_s.toFixed(1)}s</span>
-                      <span className="text-[9px] group-hover:translate-x-0.5 transition-transform">&rarr;</span>
-                    </button>
-                  )}
-                  {ev.source_type && (
-                    <span className="text-[10px] text-slate-500 mr-2 uppercase">
-                      [{ev.source_type}]
-                    </span>
-                  )}
-                  {ev.text_snippet && (
-                    <p className="text-slate-800 dark:text-slate-200 mt-1 italic font-sans">
-                      &ldquo;{ev.text_snippet}&rdquo;
-                    </p>
-                  )}
-                  {ev.reason && (
-                    <p className="text-slate-500 dark:text-slate-400 mt-1 text-[11px] font-sans">
-                      {ev.reason}
-                    </p>
-                  )}
-                </div>
+              {evidence.map((item, index) => (
+                <blockquote
+                  key={`${item.line}-${index}`}
+                  className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-3"
+                >
+                  <p className="text-[10px] font-mono text-slate-500">
+                    Line {item.line}{item.field ? ` · ${item.field}` : ''}
+                  </p>
+                  <p className="mt-1 text-xs italic text-slate-800 dark:text-slate-200">
+                    "{item.quote}"
+                  </p>
+                  {item.reason && <p className="mt-1 text-[11px] text-slate-500">{item.reason}</p>}
+                </blockquote>
               ))}
             </div>
           )}
         </div>
       )}
 
-      {/* Adjudication Trigger */}
       <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/40 flex justify-end">
         <button
-          onClick={() => onOpenReview && onOpenReview(evaluation)}
-          className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-cyan-600 dark:text-slate-400 dark:hover:text-cyan-400 transition-colors"
+          type="button"
+          onClick={() => onOpenReview?.(evaluation)}
+          disabled={!evaluation.evaluation_id}
+          className="text-xs font-medium text-slate-500 hover:text-cyan-600 dark:text-slate-400 dark:hover:text-cyan-400 disabled:opacity-40"
         >
-          <UserCheck className="w-3.5 h-3.5" /> Adjudicate / Review
+          Review batch
         </button>
       </div>
-    </div>
+    </article>
   );
 }

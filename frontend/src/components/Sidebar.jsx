@@ -3,23 +3,21 @@ import {
   BarChart3,
   PhoneCall,
   Search,
-  UploadCloud,
   Award,
-  Sliders,
   X,
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
-  Radio
+  Radio,
+  UploadCloud,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { id: 'overview', label: 'Platform Overview', icon: BarChart3 },
   { id: 'interactions', label: 'Interactions Explorer', icon: PhoneCall },
   { id: 'drilldown', label: 'Call Drill-Down', icon: Search },
-  { id: 'ingest', label: 'Ingest & Evaluate', icon: UploadCloud },
   { id: 'benchmark', label: 'Golden Benchmark', icon: Award },
-  { id: 'evaluators', label: 'Evaluators & Config', icon: Sliders },
+  { id: 'import-calls', label: 'Import Calls', icon: UploadCloud },
 ];
 
 export default function Sidebar({
@@ -109,11 +107,6 @@ export default function Sidebar({
                   }`}
                 />
                 {!isCollapsed && <span className="truncate">{item.label}</span>}
-                {!isCollapsed && item.id === 'ingest' && (
-                  <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/80 dark:border-emerald-500/30 dark:text-emerald-400 font-semibold">
-                    NEW
-                  </span>
-                )}
               </button>
             );
           })}

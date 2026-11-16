@@ -41,6 +41,52 @@ class OutboxRow(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class InteractionEventRow(Base):
+    __tablename__ = "interaction_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "interaction_id",
+            "event_id",
+            name="uq_interaction_event_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    event_id: Mapped[str] = mapped_column(String(128))
+    event_type: Mapped[str] = mapped_column(Text)
+    occurred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ArtifactReferenceRow(Base):
+    __tablename__ = "interaction_artifact_references"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "interaction_id",
+            "artifact_id",
+            name="uq_interaction_artifact_reference",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    artifact_id: Mapped[str] = mapped_column(String(128))
+    artifact_type: Mapped[str] = mapped_column(Text)
+    uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ArtifactRow(Base):
     __tablename__ = "interaction_artifacts"
     __table_args__ = (
@@ -161,34 +207,70 @@ class ObservabilityMetricsRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-class EvaluationResultRow(Base):
-    __tablename__ = "evaluation_results"
+class EvaluationRunRow(Base):
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluation_namespace: Mapped[str] = mapped_column(
+        String(64),
+        default="interaction",
+        server_default="interaction",
+    )
+    summary_json: Mapped[str] = mapped_column(Text)
+    review_required: Mapped[bool] = mapped_column(Boolean)
+    review_reasons_json: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class EvaluationBatchRow(Base):
+    __tablename__ = "evaluation_batches"
     __table_args__ = (
+        UniqueConstraint("evaluation_id", name="uq_evaluation_batch_id"),
         UniqueConstraint(
-            "tenant_id",
-            "interaction_id",
-            "evaluator_id",
-            "evaluator_version",
-            name="uq_evaluation_result",
+            "run_id",
+            "batch_name",
+            name="uq_evaluation_run_batch",
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(String(128), index=True)
+    run_id: Mapped[str] = mapped_column(String(128), index=True)
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
-    evaluator_id: Mapped[str] = mapped_column(String(128), index=True)
-    evaluator_version: Mapped[str] = mapped_column(String(32))
-    family: Mapped[str] = mapped_column(String(64))
-    method: Mapped[str] = mapped_column(String(32))
-    label: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    review_status: Mapped[str] = mapped_column(String(32), index=True)
-    evidence_json: Mapped[str] = mapped_column(Text)
-    reason: Mapped[str] = mapped_column(Text)
-    details_json: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evaluation_namespace: Mapped[str] = mapped_column(
+        String(64),
+        default="interaction",
+        server_default="interaction",
+    )
+    batch_name: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    model: Mapped[str] = mapped_column(String(128))
+    prompt_version: Mapped[str] = mapped_column(String(32))
+    schema_version: Mapped[str] = mapped_column(String(32))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parsed_output_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_json: Mapped[str] = mapped_column(Text)
+    review_required: Mapped[bool] = mapped_column(Boolean)
+    review_status: Mapped[str] = mapped_column(String(32))
+    review_reasons_json: Mapped[str] = mapped_column(Text)
+    source_evaluation_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    error_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ImportRunRow(Base):
@@ -221,6 +303,8 @@ class GoldenCallLabelRow(Base):
     first_thing_wrong_what: Mapped[str | None] = mapped_column(Text, nullable=True)
     never_rule_broken: Mapped[str] = mapped_column(String(128), default="None")
     reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    language_slice: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -231,6 +315,9 @@ class HumanReviewRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
     evaluator_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluation_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, index=True
+    )
     original_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
     reviewed_label: Mapped[str] = mapped_column(String(128))
     review_decision: Mapped[str] = mapped_column(String(32))  # ACCEPTED, OVERRIDDEN

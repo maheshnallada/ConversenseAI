@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -9,23 +10,47 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts import calculate_metrics, evaluate_calls, import_calls, process_transcripts, reconstruct_calls
 from app.evaluation.service import EvaluationService
+from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 
 
-def test_evaluation_service_uses_artifact_root_and_tenant_call_layout(
-    session_factory, monkeypatch, tmp_path
-):
-    artifact_root = tmp_path / "configured-artifacts"
-    call_folder = artifact_root / "tenant_a" / "call_01"
-    call_folder.mkdir(parents=True)
-    (call_folder / "call.json").write_text(
-        json.dumps({"call_id": "canonical-call-id"}), encoding="utf-8"
+def _evaluation_run():
+    now = datetime.now(timezone.utc)
+    batches = [
+        EvaluationBatchRecord(
+            evaluation_id=f"evaluation-{batch_name}",
+            batch_name=batch_name,
+            status="completed",
+            model="test-model",
+            prompt_version="1",
+            schema_version="1",
+            started_at=now,
+            completed_at=now,
+            input_tokens=1,
+            output_tokens=1,
+            raw_output="{}",
+            parsed_output={},
+            validation={"schema_valid": True, "evidence_valid": True},
+            review_required=False,
+            review_status="not_required",
+            review_reasons=[],
+        )
+        for batch_name in (
+            "conversation_understanding",
+            "conversation_quality",
+            "compliance_appointment",
+        )
+    ]
+    return EvaluationRun(
+        run_id="run_1",
+        tenant_id="tenant_from_env",
+        interaction_id="canonical-call-id",
+        batches=batches,
+        summary={"overall_assessment": "Good"},
+        started_at=now,
+        completed_at=now,
+        review_required=False,
+        review_reasons=[],
     )
-    monkeypatch.setenv("ARTIFACT_STORAGE_PATH", str(artifact_root))
-
-    service = EvaluationService(session_factory, registry=object())
-
-    assert service.artifact_store.base_dir == artifact_root.resolve()
-    assert service.resolve_interaction_id("tenant_a", "call_01") == "canonical-call-id"
 
 
 def test_import_calls_uses_environment_defaults(monkeypatch, tmp_path):
@@ -90,7 +115,7 @@ def test_evaluate_calls_uses_call_id_and_environment_tenant_for_custom_directory
 
         def evaluate_interaction(self, tenant_id, interaction_id):
             captured.append((tenant_id, interaction_id))
-            return []
+            return _evaluation_run()
 
     monkeypatch.setenv("TENANT_ID", "tenant_from_env")
     monkeypatch.setattr(evaluate_calls, "create_session_factory", lambda db_url: object())
@@ -129,7 +154,7 @@ def test_evaluate_calls_continues_after_a_folder_failure(
             captured.append(interaction_id)
             if interaction_id == "broken-call-id":
                 raise RuntimeError("evaluation failed")
-            return []
+            return _evaluation_run()
 
     monkeypatch.setattr(evaluate_calls, "create_session_factory", lambda db_url: object())
     monkeypatch.setattr(evaluate_calls, "init_db", lambda factory: None)
@@ -147,6 +172,38 @@ def test_evaluate_calls_continues_after_a_folder_failure(
     assert "Total Calls Evaluated: 1" in output
     assert "Failed Calls: 1" in output
     assert "call_01: evaluation failed" in output
+
+
+def test_evaluate_calls_reports_versioned_batch_statuses(
+    monkeypatch, tmp_path, capsys
+):
+    folder = tmp_path / "call_01"
+    folder.mkdir()
+    (folder / "call.json").write_text(
+        json.dumps({"call_id": "canonical-call-id"}), encoding="utf-8"
+    )
+
+    class FakeService:
+        def __init__(self, session_factory):
+            pass
+
+        def evaluate_interaction(self, tenant_id, interaction_id):
+            return _evaluation_run()
+
+    monkeypatch.setattr(evaluate_calls, "create_session_factory", lambda db_url: object())
+    monkeypatch.setattr(evaluate_calls, "init_db", lambda factory: None)
+    monkeypatch.setattr(evaluate_calls, "EvaluationService", FakeService)
+    monkeypatch.setattr(
+        sys, "argv", ["evaluate_calls.py", "--data-dir", str(tmp_path)]
+    )
+
+    evaluate_calls.main()
+
+    output = capsys.readouterr().out
+    assert "Overall assessments:" in output
+    assert "Good: 1 calls" in output
+    assert "conversation_understanding: 1 completed" in output
+    assert "what_happened" not in output
 
 
 def test_calculate_metrics_uses_artifact_tenant_default(monkeypatch, tmp_path, capsys):

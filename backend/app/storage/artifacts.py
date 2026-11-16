@@ -19,6 +19,7 @@ class StoredArtifact:
     byte_size: int
     media_type: str
     source_path: str
+    created: bool = False
 
 
 class ArtifactStore(ABC):
@@ -32,6 +33,10 @@ class ArtifactStore(ABC):
 
     @abstractmethod
     def exists(self, uri: str) -> bool:
+        pass
+
+    @abstractmethod
+    def delete(self, uri: str) -> bool:
         pass
 
 
@@ -102,26 +107,25 @@ class LocalArtifactStore(ArtifactStore):
             relative_dest = f"{digest[:2]}/{digest[2:4]}/{digest}_{src.name}"
 
         dest = (self.base_dir / relative_dest).resolve()
-        dest_stored = False
+        created = False
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                shutil.copy2(src, dest)
-            dest_stored = True
+            created = self._copy_if_missing(src, dest)
         except OSError:
+            if created and dest.exists():
+                dest.unlink()
+            created = False
             # Fallback to system temp directory if base_dir is read-only
-            try:
-                temp_dest = (Path(tempfile.gettempdir()) / "conversense_artifacts" / relative_dest).resolve()
-                temp_dest.parent.mkdir(parents=True, exist_ok=True)
-                if not temp_dest.exists():
-                    shutil.copy2(src, temp_dest)
-                dest = temp_dest
-                dest_stored = True
-            except OSError:
-                dest_stored = False
+            temp_dest = (
+                Path(tempfile.gettempdir()) / "conversense_artifacts" / relative_dest
+            ).resolve()
+            temp_dest.parent.mkdir(parents=True, exist_ok=True)
+            created = self._copy_if_missing(src, temp_dest)
+            dest = temp_dest
 
-        # If dest was successfully stored, use its URI; otherwise reference existing source file directly
-        final_path = dest if dest_stored and dest.exists() else src
+        if not dest.is_file():
+            raise OSError("Artifact storage did not produce a file")
+        final_path = dest
         uri = final_path.as_uri()
         artifact_id = str(uuid.uuid5(uuid.NAMESPACE_URL, uri))
 
@@ -132,7 +136,25 @@ class LocalArtifactStore(ArtifactStore):
             byte_size=byte_size,
             media_type=media_type,
             source_path=str(src),
+            created=created,
         )
+
+    @staticmethod
+    def _copy_if_missing(source: Path, destination: Path) -> bool:
+        created = False
+        try:
+            with source.open("rb") as source_file:
+                with destination.open("xb") as destination_file:
+                    created = True
+                    shutil.copyfileobj(source_file, destination_file)
+            shutil.copystat(source, destination)
+            return created
+        except FileExistsError:
+            return False
+        except OSError:
+            if created and destination.exists():
+                destination.unlink()
+            raise
 
     def get_path(self, uri: str) -> Path:
         if uri.startswith("file://"):
@@ -153,4 +175,20 @@ class LocalArtifactStore(ArtifactStore):
             return self.get_path(uri).exists()
         except (ValueError, FileNotFoundError):
             return False
+
+    def delete(self, uri: str) -> bool:
+        path = self.get_path(uri)
+        if path.is_symlink():
+            raise ValueError("Artifact URI must reference a regular stored file")
+        resolved = path.resolve()
+        managed_roots = (
+            self.base_dir,
+            (Path(tempfile.gettempdir()) / "conversense_artifacts").resolve(),
+        )
+        if not any(root == resolved or root in resolved.parents for root in managed_roots):
+            raise ValueError("Artifact URI is outside managed storage")
+        if not resolved.is_file():
+            return False
+        resolved.unlink()
+        return True
 

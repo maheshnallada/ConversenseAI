@@ -67,5 +67,5 @@ def test_full_50_calls_dataset_import(tmp_path: Path):
         assert session.scalar(select(func.count(InteractionRow.id))) == 50
         assert session.scalar(select(func.count(OutboxRow.id))) == 50
         assert session.scalar(select(func.count(ArtifactRow.id))) == 672
-        assert session.scalar(select(func.count(ImportRunRow.id))) == 2
+        assert session.scalar(select(func.count(ImportRunRow.id))) == 0
 

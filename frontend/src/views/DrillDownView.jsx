@@ -21,6 +21,23 @@ import {
   FolderOpen
 } from 'lucide-react';
 
+function getDeliveryState(event) {
+  const declaredStatus = typeof event.delivery_status === 'string'
+    ? event.delivery_status
+    : '';
+  const playbackStatus = typeof event.metadata?.playback_spoken === 'string'
+    ? event.metadata.playback_spoken
+    : '';
+  if (
+    declaredStatus &&
+    playbackStatus &&
+    declaredStatus.toLowerCase() !== playbackStatus.toLowerCase()
+  ) {
+    return 'mismatch';
+  }
+  return declaredStatus || playbackStatus || 'unknown';
+}
+
 export default function DrillDownView({ initialCallId, onSelectCallId }) {
   const [callList, setCallList] = useState([]);
   const [selectedCallId, setSelectedCallId] = useState(initialCallId || '');
@@ -30,8 +47,10 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   const [error, setError] = useState(null);
 
   // Call Data
+  const [interaction, setInteraction] = useState(null);
   const [timeline, setTimeline] = useState(null);
-  const [evaluations, setEvaluations] = useState([]);
+  const [observabilityData, setObservabilityData] = useState(null);
+  const [evaluationRun, setEvaluationRun] = useState(null);
   const [reviews, setReviews] = useState([]);
   const [audioUrl, setAudioUrl] = useState('');
   const [currentTime, setCurrentTime] = useState(0);
@@ -39,7 +58,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
 
   // Timeline UI filters & controls
   const [speakerFilter, setSpeakerFilter] = useState('all'); // 'all', 'agent', 'customer'
-  const [deliveryFilter, setDeliveryFilter] = useState('all'); // 'all', 'heard', 'cut', 'not_played'
+  const [deliveryFilter, setDeliveryFilter] = useState('all');
   const [turnSearch, setTurnSearch] = useState('');
   const [expandAllDetails, setExpandAllDetails] = useState(null); // null, true, false
 
@@ -57,9 +76,17 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   useEffect(() => {
     async function fetchCalls() {
       try {
-        const calls = await api.getInteractionsList();
-        setCallList(calls || []);
-        if (!selectedCallId && calls && calls.length > 0) {
+        const firstPage = await api.getInteractionsPage({ page: 1, page_size: 100 });
+        const pages = Array.from(
+          { length: Math.max(0, (firstPage.pages || 1) - 1) },
+          (_, index) => index + 2
+        );
+        const remainingPages = await Promise.all(
+          pages.map((page) => api.getInteractionsPage({ page, page_size: 100 }))
+        );
+        const calls = [firstPage, ...remainingPages].flatMap((page) => page.items || []);
+        setCallList(calls);
+        if (!selectedCallId && calls.length > 0) {
           const first = calls[0].interaction_id || calls[0].id || calls[0];
           selectCallId(first);
         }
@@ -122,19 +149,25 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     setCurrentTime(0);
     setSeekTarget(null);
     setExpandAllDetails(null);
+    setInteraction(null);
     setTimeline(null);
-    setEvaluations([]);
+    setObservabilityData(null);
+    setEvaluationRun(null);
     setReviews([]);
     try {
-      const [tlData, evalsData, revsData] = await Promise.all([
+      const [interactionData, tlData, obsData, evalsData, revsData] = await Promise.all([
+        api.getInteraction(id),
         api.getTimeline(id),
+        api.getObservability(id),
         api.getEvaluations(id),
         api.listReviews(id),
       ]);
 
       if (requestId !== loadRequestId.current) return;
+      setInteraction(interactionData);
       setTimeline(tlData);
-      setEvaluations(evalsData);
+      setObservabilityData(obsData);
+      setEvaluationRun(evalsData);
       setReviews(revsData);
     } catch (err) {
       if (requestId !== loadRequestId.current) return;
@@ -167,12 +200,15 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     }
   };
 
-  const handleReevaluate = async () => {
+  const handleReevaluate = async (retryFailed = false) => {
     if (!selectedCallId) return;
     setEvaluating(true);
     try {
-      const newEvals = await api.evaluate(selectedCallId);
-      setEvaluations(newEvals || []);
+      const newRun = await api.evaluate(
+        selectedCallId,
+        retryFailed ? evaluationRun?.run_id : null
+      );
+      setEvaluationRun(newRun);
       const tl = await api.getTimeline(selectedCallId).catch(() => null);
       if (tl) setTimeline(tl);
     } catch (e) {
@@ -189,7 +225,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
   };
 
   const formatFailureLabel = (str) => {
-    if (!str || str.toLowerCase() === 'none') return 'None';
+    if (!str || str.toLowerCase() === 'none') return 'Unavailable';
     return str
       .toLowerCase()
       .replace(/_/g, ' ')
@@ -205,10 +241,12 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     if (speakerFilter !== 'all' && e.speaker !== speakerFilter) return false;
 
     if (deliveryFilter !== 'all') {
-      const st = (e.delivery_status || e.metadata?.playback_spoken || '').toLowerCase();
-      if (deliveryFilter === 'cut' && !st.includes('cut')) return false;
+      const st = getDeliveryState(e).toLowerCase();
+      if (deliveryFilter === 'cut' && st !== 'cut') return false;
       if (deliveryFilter === 'heard' && st !== 'heard') return false;
       if (deliveryFilter === 'not_played' && st !== 'not_played') return false;
+      if (deliveryFilter === 'unknown' && st !== 'unknown') return false;
+      if (deliveryFilter === 'mismatch' && st !== 'mismatch') return false;
     }
 
     if (turnSearch) {
@@ -220,11 +258,36 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
     return true;
   });
 
-  // Extract primary outcome and quality summary from evaluations
-  const outcomeEval = evaluations.find((ev) => ev.evaluator_id === 'outcome.intent' || ev.family === 'outcome');
-  const qualityEval = evaluations.find((ev) => ev.evaluator_id === 'quality.scorecard' || ev.family === 'quality');
-  const experienceEval = evaluations.find((ev) => ev.evaluator_id === 'experience.sentiment_emotion' || ev.family === 'experience');
-  const complianceEval = evaluations.find((ev) => ev.evaluator_id === 'compliance.never_rules' || ev.family === 'compliance');
+  const evaluationBatches = evaluationRun?.batches || [];
+  const understanding = evaluationBatches.find(
+    (batch) => batch.batch_name === 'conversation_understanding'
+  )?.parsed_output;
+  const quality = evaluationBatches.find(
+    (batch) => batch.batch_name === 'conversation_quality'
+  )?.parsed_output;
+  const overallAssessment = evaluationRun?.summary?.overall_assessment;
+  const conversationStatus = quality?.conversation_completeness?.conversation_status;
+  const compliance = evaluationBatches.find(
+    (batch) => batch.batch_name === 'compliance_appointment'
+  )?.parsed_output?.compliance?.rule_results;
+  const detectedRuleCount = Object.values(compliance || {}).filter(
+    (rule) => rule.status === 'DETECTED'
+  ).length;
+  const criticalIssues = evaluationRun?.summary?.critical_issues || [];
+  const hasFailedBatches = evaluationBatches.some((batch) => batch.status === 'failed');
+  const whatHappened = evaluationRun?.summary?.what_happened || quality?.what_happened?.label;
+  const firstThingWrongCategory = evaluationRun?.summary?.first_thing_wrong_category
+    || quality?.first_thing_wrong?.category
+    || quality?.first_thing_wrong_candidate?.category;
+  const firstThingWrongLine = evaluationRun?.summary?.first_thing_wrong_line
+    ?? quality?.first_thing_wrong?.line
+    ?? quality?.first_thing_wrong_candidate?.line;
+  const firstThingWrongDesc = evaluationRun?.summary?.first_thing_wrong_description
+    || quality?.first_thing_wrong?.description
+    || quality?.first_thing_wrong_candidate?.description;
+  const observabilityMetrics = observabilityData?.metrics;
+  const formatMetric = (value, suffix = '') =>
+    value == null ? 'Unavailable' : `${value}${suffix}`;
 
   return (
     <div className="space-y-4">
@@ -298,12 +361,24 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-200 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 dark:text-cyan-300 dark:border-cyan-500/40 transition-all disabled:opacity-50 shadow-sm"
             >
               <Sparkles className={`w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 ${evaluating ? 'animate-spin' : ''}`} />
-              <span>{evaluating ? 'Evaluating...' : 'Run Evaluators'}</span>
+              <span>{evaluating ? 'Evaluating...' : 'Run evaluation'}</span>
             </button>
 
+            {hasFailedBatches && (
+              <button
+                onClick={() => handleReevaluate(true)}
+                disabled={evaluating}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 disabled:opacity-50"
+              >
+                Retry failed batches
+              </button>
+            )}
+
             <button
-              onClick={() => handleOpenAdjudicate(evaluations[0] || null)}
-              disabled={!selectedCallId}
+              onClick={() => handleOpenAdjudicate(
+                evaluationBatches.find((batch) => batch.review_required) || evaluationBatches[0] || null
+              )}
+              disabled={!selectedCallId || evaluationBatches.length === 0}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 transition-colors shadow-md shadow-cyan-500/20 disabled:opacity-50"
             >
               <UserCheck className="w-3.5 h-3.5" /> Adjudicate
@@ -313,37 +388,75 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
 
         {/* Bottom Executive Status Strip */}
         <div className="flex flex-wrap items-center gap-2">
-          {outcomeEval && (
+          {understanding?.outcome && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
               <span className="text-slate-500 mr-1.5">Outcome:</span>
-              <span className="text-slate-900 dark:text-white font-bold">{outcomeEval.label || 'Unknown'}</span>
+              <span className="text-slate-900 dark:text-white font-bold">{understanding.outcome.label}</span>
             </div>
           )}
 
-          {qualityEval && (
+          {overallAssessment && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
-              <span className="text-slate-500 mr-1.5">Quality:</span>
+              <span className="text-slate-500 mr-1.5">Assessment:</span>
               <span className={`font-bold ${
-                qualityEval.label === 'Good' ? 'text-emerald-600 dark:text-emerald-400' : qualityEval.label === 'OK' ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'
+                overallAssessment === 'Good' ? 'text-emerald-600 dark:text-emerald-400' : overallAssessment === 'OK' ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'
               }`}>
-                {qualityEval.label || qualityEval.review_status}
+                {overallAssessment}
               </span>
             </div>
           )}
 
-          {experienceEval && (
+          {understanding?.sentiment && understanding?.emotion && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
-              <span className="text-slate-500 mr-1.5">Emotion:</span>
-              <span className="text-cyan-700 dark:text-cyan-300 font-bold capitalize">{experienceEval.label || 'Neutral'}</span>
+              <span className="text-slate-500 mr-1.5">Sentiment / emotion:</span>
+              <span className="text-cyan-700 dark:text-cyan-300 font-bold">
+                {understanding.sentiment.label} / {understanding.emotion.label}
+              </span>
             </div>
           )}
 
-          {complianceEval && (
+          {conversationStatus && (
             <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans flex items-center gap-1.5 whitespace-nowrap shadow-sm">
-              <span className="text-slate-500">Never-Rules:</span>
-              <span className={`font-bold ${complianceEval.review_status === 'PASSED' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                {complianceEval.review_status}
+              <span className="text-slate-500">Conversation status:</span>
+              <span className="font-bold text-slate-800 dark:text-slate-200">{conversationStatus}</span>
+            </div>
+          )}
+          {whatHappened && (
+            <div
+              className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm"
+              title="What happened in interaction"
+            >
+              <span className="text-slate-500 mr-1.5">What happened:</span>
+              <span className="text-indigo-700 dark:text-indigo-300 font-bold">{whatHappened}</span>
+            </div>
+          )}
+
+          {firstThingWrongCategory && (
+            <div
+              className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm"
+              title={firstThingWrongDesc || `Predicted first failure: ${firstThingWrongCategory}`}
+            >
+              <span className="text-slate-500 mr-1.5">First thing wrong:</span>
+              <span
+                className={`font-mono font-bold ${
+                  firstThingWrongCategory === 'NONE'
+                    ? 'text-emerald-700 dark:text-emerald-300'
+                    : 'text-rose-700 dark:text-rose-300'
+                }`}
+              >
+                {firstThingWrongCategory}
+                {firstThingWrongLine != null ? ` (Line ${firstThingWrongLine})` : ''}
               </span>
+            </div>
+          )}
+
+          {compliance && (
+            <div className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-sans whitespace-nowrap shadow-sm">
+              <span className="text-slate-500 mr-1.5">Detected compliance issues:</span>
+              <span className="font-bold text-rose-700 dark:text-rose-300">{detectedRuleCount}</span>
+              {criticalIssues.length > 0 && (
+                <span className="ml-1 text-slate-500">({criticalIssues.length} critical)</span>
+              )}
             </div>
           )}
         </div>
@@ -364,13 +477,70 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
         onSeekTo={seekTarget}
       />
 
-      {/* 3. Telemetry Diagnostic Strip */}
+      <section className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200 mb-3">
+          Canonical interaction
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div><span className="text-slate-500">Status</span><div className="font-semibold">{interaction?.status || 'Unavailable'}</div></div>
+          <div><span className="text-slate-500">Use case</span><div className="font-semibold">{interaction?.use_case || 'Unavailable'}</div></div>
+          <div><span className="text-slate-500">Schema version</span><div className="font-semibold">{interaction?.schema_version || 'Unavailable'}</div></div>
+          <div><span className="text-slate-500">Started</span><div className="font-semibold">{interaction?.started_at ? new Date(interaction.started_at).toLocaleString() : 'Unavailable'}</div></div>
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+          Technical observability
+        </h3>
+        {!observabilityData?.available ? (
+          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 text-xs text-slate-500">
+            Observability metrics are unavailable for this interaction.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Recording</span>
+              <span className="text-sm font-bold">{formatMetric(observabilityMetrics?.recording_duration_s, 's')}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">First response</span>
+              <span className="text-sm font-bold">{formatMetric(observabilityMetrics?.first_agent_latency_s, 's')}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Input tokens</span>
+              <span className="text-sm font-bold">{observabilityMetrics?.input_tokens ?? 'Unavailable'}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Output tokens</span>
+              <span className="text-sm font-bold">{observabilityMetrics?.output_tokens ?? 'Unavailable'}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Estimated cost</span>
+              <span className="text-sm font-bold">{observabilityMetrics?.cost_breakdown?.total_cost == null ? 'Unavailable' : `${observabilityMetrics.cost_breakdown.total_cost} ${observabilityMetrics.cost_breakdown.currency || ''}`}</span>
+            </div>
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+              <span className="text-[10px] text-slate-500 uppercase block">Timestamp quality</span>
+              <span className="text-sm font-bold">{observabilityMetrics?.timestamp_quality || 'Unavailable'}</span>
+            </div>
+            {observabilityMetrics?.playback_review_required && (
+              <div className="col-span-full p-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-800 dark:text-amber-300">
+                Playback metadata needs review. {observabilityMetrics.playback_mismatches?.length || 0} mismatch(es) were reported.
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+        Reconstructed timeline
+      </h3>
       {timeline && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
           <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800/80 bg-white dark:bg-slate-900/50 shadow-sm dark:shadow-none">
             <span className="text-[10px] font-sans text-slate-500 uppercase block font-semibold">Duration</span>
             <span className="text-sm font-bold font-sans text-slate-900 dark:text-slate-100 mt-0.5 block">
-              {timeline.total_duration_s ? `${timeline.total_duration_s.toFixed(1)}s` : 'N/A'}
+              {timeline.total_duration_s == null ? 'Unavailable' : `${timeline.total_duration_s.toFixed(1)}s`}
             </span>
           </div>
 
@@ -399,7 +569,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
             <span className="text-[10px] font-sans text-slate-500 uppercase block font-semibold">Tech Failure</span>
             <span
               className={`text-xs font-sans font-bold mt-1 block truncate ${
-                timeline.first_technical_failure ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
+                timeline.first_technical_failure ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-400'
               }`}
               title={timeline.first_technical_failure?.failure_type}
             >
@@ -411,7 +581,7 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
             <span className="text-[10px] font-sans text-slate-500 uppercase block font-semibold">Conversational Issue</span>
             <span
               className={`text-xs font-sans font-bold mt-1 block truncate ${
-                timeline.first_conversational_failure ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
+                timeline.first_conversational_failure ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-400'
               }`}
               title={timeline.first_conversational_failure?.failure_type}
             >
@@ -475,8 +645,8 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
                 </button>
               ))}
 
-              <span className="text-xs text-slate-500 ml-2 mr-1 font-semibold">Status:</span>
-              {['all', 'heard', 'cut', 'not_played'].map((st) => (
+              <span className="text-xs text-slate-500 ml-2 mr-1 font-semibold">Playback evidence:</span>
+              {['all', 'heard', 'cut', 'not_played', 'unknown', 'mismatch'].map((st) => (
                 <button
                   key={st}
                   onClick={() => setDeliveryFilter(st)}
@@ -546,26 +716,25 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider font-sans">
-                  Evaluations &amp; Quality Rubrics
+                  Semantic evaluation batches
                 </h3>
               </div>
               <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold font-sans">
-                {evaluations.length} Active
+                {evaluationBatches.length} of 3
               </span>
             </div>
 
-            {evaluations.length === 0 ? (
+            {evaluationBatches.length === 0 ? (
               <div className="p-6 text-center rounded-2xl border border-slate-200 dark:border-slate-800/80 bg-white dark:bg-slate-900/30 text-slate-500 text-xs shadow-sm">
-                No evaluations recorded for this interaction yet. Click &ldquo;Run Evaluators&rdquo; above to run the 5-dimension suite.
+                No evaluation run is available. Start an evaluation to create the three batch results.
               </div>
             ) : (
               <div className="space-y-3 max-h-[460px] overflow-y-auto pr-1">
-                {evaluations.map((ev, i) => (
+                {evaluationBatches.map((ev) => (
                   <EvaluationCard
-                    key={ev.evaluator_id || i}
+                    key={ev.evaluation_id}
                     evaluation={ev}
                     onOpenReview={handleOpenAdjudicate}
-                    onSeek={(s) => setSeekTarget(s)}
                   />
                 ))}
               </div>
@@ -582,8 +751,10 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
                 </h3>
               </div>
               <button
-                onClick={() => handleOpenAdjudicate(evaluations[0] || null)}
-                disabled={!selectedCallId}
+                onClick={() => handleOpenAdjudicate(
+                  evaluationBatches.find((batch) => batch.review_required) || evaluationBatches[0] || null
+                )}
+                disabled={!selectedCallId || evaluationBatches.length === 0}
                 className="text-xs font-sans text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300 font-semibold transition-colors disabled:opacity-50"
               >
                 + Add Review
@@ -599,7 +770,9 @@ export default function DrillDownView({ initialCallId, onSelectCallId }) {
                 {reviews.map((r, i) => (
                   <div key={r.review_id || i} className="p-3 rounded-xl bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 text-xs shadow-sm dark:shadow-none font-sans">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono text-cyan-700 dark:text-cyan-400 font-bold">{r.evaluator_id}</span>
+                      <span className="font-mono text-cyan-700 dark:text-cyan-400 font-bold">
+                        {r.evaluation_id || `Archived: ${r.evaluator_id}`}
+                      </span>
                       <span className={`px-2 py-0.5 rounded-full font-mono text-[10px] font-bold ${
                         r.review_decision === 'OVERRIDDEN'
                           ? 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/70 dark:text-amber-400 dark:border-amber-600/30'

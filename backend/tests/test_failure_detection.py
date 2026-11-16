@@ -4,6 +4,7 @@ from app.reconstruction.failures import (
     FailureCategory,
     FailureRecord,
     detect_failures,
+    select_first_failure,
 )
 
 
@@ -34,16 +35,51 @@ def test_detect_no_agent_audio():
     assert res.first_technical_failure.category == FailureCategory.TECHNICAL
 
 
-def test_detect_late_agent_opening():
-    # First agent words start at 4.2s (> 3.0s threshold)
+def test_late_agent_opening_remains_a_metric_not_a_failure():
     turns = [
         _turn(0, "agent", 4.2, 6.0, spoken="heard"),
         _turn(1, "customer", 6.5, 7.5),
     ]
     res = detect_failures(turns, {"agent_wav_count": 1})
-    assert res.first_technical_failure is not None
-    assert res.first_technical_failure.failure_type == "LATE_AGENT_OPENING"
-    assert res.first_technical_failure.time_s == 4.2
+    assert res.first_technical_failure is None
+    assert all(failure.failure_type != "LATE_AGENT_OPENING" for failure in res.all_failures)
+
+
+def test_missing_agent_turns_without_audio_evidence_are_not_failures():
+    turns = [_turn(0, "customer", 0.5, 2.0)]
+
+    res = detect_failures(turns, {})
+
+    assert res.first_technical_failure is None
+    assert all(failure.failure_type != "NO_AGENT_AUDIO" for failure in res.all_failures)
+
+
+def test_original_turn_order_orders_failures_when_timestamps_are_unavailable():
+    turns = [
+        _turn(0, "agent", None, None, spoken="cut"),
+        _turn(1, "agent", 5.0, 6.0, spoken="not_played"),
+    ]
+
+    res = detect_failures(turns, {"agent_wav_count": 2})
+
+    assert [failure.failure_type for failure in res.all_failures] == [
+        "AGENT_PLAYBACK_CUT",
+        "AGENT_LINE_NOT_PLAYED",
+    ]
+    assert res.first_technical_failure is res.all_failures[0]
+    assert res.technical_ordering_unknown is False
+
+
+def test_failure_order_is_unknown_without_time_or_transcript_sequence():
+    candidates = [
+        FailureRecord("failure-a", FailureCategory.TECHNICAL, None, None, "evidence"),
+        FailureRecord("failure-b", FailureCategory.TECHNICAL, None, None, "evidence"),
+    ]
+
+    first, ordering_unknown = select_first_failure(candidates)
+
+    assert first is None
+    assert ordering_unknown is True
 
 
 def test_detect_agent_cut_and_customer_interruption():

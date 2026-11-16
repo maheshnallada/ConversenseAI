@@ -1,131 +1,442 @@
-from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+﻿import asyncio
+from datetime import datetime, timezone
 
-import pytest
-from sqlalchemy import event
+from sqlalchemy import text
 from sqlalchemy.pool import StaticPool
 
-from app.domain.evaluation import EvaluationResult, EvidenceItem
+from app.domain.envelope import InteractionEnvelope
+from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
+from app.evaluation.service import EvaluationService
+from app.storage import orm
 from app.storage.db import create_session_factory, init_db
 from app.storage.evaluation_repo import EvaluationRepository
+from app.storage.orm import InteractionRow
 
 
 def _factory():
-    f = create_session_factory("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    f = create_session_factory(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     init_db(f)
     return f
 
 
-def _sample_result(interaction_id="call_01", evaluator_id="compliance.never_rules"):
-    evidence = [
-        EvidenceItem(
-            source_type="transcript_turn",
-            reference_id="turn_2",
-            line_index=2,
-            text_snippet="Maine policy confirm kar di",
-            timestamp_s=4.5,
-            reason="Customer agreed to callback",
+def _create_archived_results_table(factory):
+    with factory.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE evaluation_results "
+                "(id INTEGER PRIMARY KEY, tenant_id TEXT, interaction_id TEXT, "
+                "evaluator_id TEXT, evaluator_version TEXT, family TEXT, "
+                "method TEXT, label TEXT, score FLOAT, confidence FLOAT, "
+                "severity TEXT, review_status TEXT, evidence_json TEXT, "
+                "reason TEXT, details_json TEXT, created_at DATETIME)"
+            )
         )
-    ]
-    return EvaluationResult(
+
+
+def test_archived_evaluation_table_is_unmapped_and_left_intact():
+    factory = create_session_factory(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    with factory.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE evaluation_results "
+                "(id INTEGER PRIMARY KEY, evaluator_id TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO evaluation_results (evaluator_id) "
+                "VALUES ('archived.evaluator')"
+            )
+        )
+
+    assert not hasattr(orm, "EvaluationResultRow")
+    init_db(factory)
+    with factory.kw["bind"].connect() as connection:
+        row_count = connection.scalar(
+            text("SELECT COUNT(*) FROM evaluation_results")
+        )
+    assert row_count == 1
+
+
+def _sample_batch(
+    evaluation_id,
+    batch_name="conversation_understanding",
+    evaluation_namespace="interaction",
+):
+    now = datetime.now(timezone.utc)
+    return EvaluationBatchRecord(
+        evaluation_id=evaluation_id,
+        batch_name=batch_name,
+        status="completed",
+        model="test-model",
+        prompt_version="1.0.0",
+        schema_version="1.0.0",
+        started_at=now,
+        completed_at=now,
+        input_tokens=12,
+        output_tokens=7,
+        raw_output='{"outcome":{"label":"Not interested"}}',
+        parsed_output={"outcome": {"label": "Not interested"}},
+        validation={
+            "schema_valid": True,
+            "evidence_valid": True,
+            "issues": [],
+        },
+        review_required=False,
+        review_status="not_required",
+        review_reasons=[],
+        evaluation_namespace=evaluation_namespace,
+    )
+
+
+def _sample_run(
+    run_id,
+    evaluation_id,
+    interaction_id="call_batched",
+    evaluation_namespace="interaction",
+):
+    now = datetime.now(timezone.utc)
+    return EvaluationRun(
+        run_id=run_id,
         tenant_id="tenant_eval",
         interaction_id=interaction_id,
-        evaluator_id=evaluator_id,
-        evaluator_version="1.0.0",
-        family="compliance",
-        method="deterministic",
-        label="PASSED",
-        score=1.0,
-        confidence=1.0,
-        severity="low",
-        review_status="PASSED",
-        evidence=evidence,
-        reason="No compliance rules violated",
+        batches=[
+            _sample_batch(
+                evaluation_id,
+                evaluation_namespace=evaluation_namespace,
+            )
+        ],
+        summary={"overall_assessment": "Good"},
+        started_at=now,
+        completed_at=now,
+        review_required=False,
+        review_reasons=[],
+        evaluation_namespace=evaluation_namespace,
     )
 
 
-def test_save_and_get_evaluation_results():
+def test_versioned_run_round_trip_and_tenant_scope():
+    repo = EvaluationRepository(_factory())
+    run = _sample_run("run-1", "batch-1")
+
+    repo.save_run(run)
+
+    retrieved = repo.get_run("tenant_eval", "call_batched", "run-1")
+    assert retrieved is not None
+    assert retrieved.run_id == "run-1"
+    assert retrieved.batches[0].evaluation_id == "batch-1"
+    assert retrieved.batches[0].parsed_output == {
+        "outcome": {"label": "Not interested"}
+    }
+    assert retrieved.batches[0].input_tokens == 12
+    assert repo.get_run("other_tenant", "call_batched", "run-1") is None
+
+
+def test_latest_run_excludes_historical_generic_evaluation_rows():
     factory = _factory()
     repo = EvaluationRepository(factory)
+    now = datetime.now(timezone.utc)
+    _create_archived_results_table(factory)
+    with factory.begin() as session:
+        session.execute(
+            text(
+                "INSERT INTO evaluation_results "
+                "(tenant_id, interaction_id, evaluator_id, evaluator_version, "
+                "family, method, label, review_status, evidence_json, reason, "
+                "details_json, created_at) VALUES "
+                "('tenant_eval', 'call_batched', 'legacy.evaluator', '1', "
+                "'outcome', 'deterministic', 'legacy', 'PASSED', '[]', "
+                "'archived', '{}', :created_at)"
+            ),
+            {"created_at": now.isoformat()},
+        )
+    repo.save_run(_sample_run("run-old", "batch-old"))
+    repo.save_run(_sample_run("run-new", "batch-new"))
 
-    r1 = _sample_result("call_01", "compliance.never_rules")
-    r2 = _sample_result("call_01", "outcome.classifier")
-    r2.label = "Expert call booked"
-    r2.family = "outcome"
+    latest = repo.get_latest_run("tenant_eval", "call_batched")
 
-    repo.save_results("tenant_eval", "call_01", [r1, r2])
-
-    retrieved = repo.get_results("tenant_eval", "call_01")
-    assert len(retrieved) == 2
-
-    comp = next(r for r in retrieved if r.evaluator_id == "compliance.never_rules")
-    assert comp.label == "PASSED"
-    assert comp.score == 1.0
-    assert len(comp.evidence) == 1
-    assert comp.evidence[0].line_index == 2
-
-    # Idempotency: re-saving replaces cleanly
-    repo.save_results("tenant_eval", "call_01", [r1, r2])
-    retrieved2 = repo.get_results("tenant_eval", "call_01")
-    assert len(retrieved2) == 2
+    assert latest is not None
+    assert latest.run_id == "run-new"
+    assert {batch.evaluation_id for batch in latest.batches} == {"batch-new"}
 
 
-def test_query_by_review_status():
+def test_distinct_runs_preserve_batch_provenance_for_retries():
+    repo = EvaluationRepository(_factory())
+    first = _sample_run("run-1", "batch-original")
+    retry = _sample_run("run-2", "batch-copied")
+    retry.batches[0].source_evaluation_id = "batch-original"
+
+    repo.save_run(first)
+    repo.save_run(retry)
+
+    loaded_retry = repo.get_run("tenant_eval", "call_batched", "run-2")
+    loaded_original = repo.get_run("tenant_eval", "call_batched", "run-1")
+    assert loaded_retry is not None
+    assert loaded_original is not None
+    assert loaded_retry.batches[0].source_evaluation_id == "batch-original"
+    assert loaded_original.batches[0].source_evaluation_id is None
+
+
+def test_evaluation_namespace_scopes_run_and_batch_round_trips():
+    repo = EvaluationRepository(_factory())
+    repo.save_run(_sample_run("interaction-run", "interaction-batch"))
+    repo.save_run(
+        _sample_run(
+            "golden-run",
+            "golden-batch",
+            evaluation_namespace="golden",
+        )
+    )
+
+    latest_interaction = repo.get_latest_run("tenant_eval", "call_batched")
+    latest_golden = repo.get_latest_run(
+        "tenant_eval",
+        "call_batched",
+        evaluation_namespace="golden",
+    )
+
+    assert latest_interaction is not None
+    assert latest_interaction.run_id == "interaction-run"
+    assert latest_interaction.evaluation_namespace == "interaction"
+    assert latest_interaction.batches[0].evaluation_namespace == "interaction"
+    assert latest_golden is not None
+    assert latest_golden.run_id == "golden-run"
+    assert latest_golden.evaluation_namespace == "golden"
+    assert latest_golden.batches[0].evaluation_namespace == "golden"
+    assert repo.get_run("tenant_eval", "call_batched", "golden-run") is None
+    assert (
+        repo.get_run(
+            "tenant_eval",
+            "call_batched",
+            "golden-run",
+            evaluation_namespace="golden",
+        ).run_id
+        == "golden-run"
+    )
+
+
+def test_input_evaluation_uses_requested_namespace_without_loading_interaction_row():
     factory = _factory()
-    repo = EvaluationRepository(factory)
+    service = EvaluationService(factory)
+    envelope = InteractionEnvelope(
+        tenant_id="tenant_eval",
+        interaction_id="call_input",
+        schema_version="1.0",
+    )
+    turns = [
+        {
+            "turn_id": "turn-1",
+            "interaction_id": "call_input",
+            "tenant_id": "tenant_eval",
+            "turn_index": 1,
+            "speaker": "customer",
+            "raw_text": "Hello there",
+            "normalized_text": "hello there",
+        }
+    ]
 
-    flagged = _sample_result("call_02", "compliance.never_rules")
-    flagged.label = "FAILED"
-    flagged.review_status = "FLAGGED_FOR_REVIEW"
-    flagged.severity = "high"
+    captured = {}
 
-    repo.save_results("tenant_eval", "call_02", [flagged])
+    class StubRegistry:
+        async def evaluate_batches(self, interaction, turns, timeline=None, batch_names=None):
+            captured["interaction"] = interaction
+            captured["turns"] = turns
+            captured["timeline"] = timeline
+            captured["batch_names"] = batch_names
+            batch = _sample_batch("golden-batch", evaluation_namespace="golden_dataset")
+            return EvaluationRun(
+                run_id="run-input-golden",
+                tenant_id=interaction.tenant_id,
+                interaction_id=interaction.interaction_id,
+                batches=[batch],
+                summary={"overall_assessment": "Good"},
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+                review_required=False,
+                review_reasons=[],
+                evaluation_namespace="golden_dataset",
+            )
 
-    flagged_list = repo.get_flagged_for_review("tenant_eval")
-    assert len(flagged_list) == 1
-    assert flagged_list[0].interaction_id == "call_02"
-    assert flagged_list[0].severity == "high"
+    service.registry = StubRegistry()
+
+    run = asyncio.run(
+        service.evaluate_input(
+            envelope,
+            turns,
+            evaluation_namespace="golden_dataset",
+        )
+    )
+
+    assert captured["interaction"] is envelope
+    assert captured["turns"] is turns
+    assert captured["timeline"] is None
+    assert captured["batch_names"] is None
+    assert run.evaluation_namespace == "golden_dataset"
+    assert run.batches[0].evaluation_namespace == "golden_dataset"
+    assert service.eval_repo.get_run(
+        "tenant_eval",
+        "call_input",
+        "run-input-golden",
+        evaluation_namespace="golden_dataset",
+    ) is not None
+    with factory() as session:
+        assert session.scalar(
+            text(
+                "SELECT COUNT(*) FROM interactions WHERE tenant_id = :tenant_id "
+                "AND interaction_id = :interaction_id"
+            ),
+            {"tenant_id": "tenant_eval", "interaction_id": "call_input"},
+        ) == 0
 
 
-def test_concurrent_saves_replace_the_same_evaluation_key(tmp_path):
-    database_path = tmp_path / "concurrent-evaluations.sqlite3"
-    factory = create_session_factory(f"sqlite:///{database_path}")
+def test_init_db_migrates_existing_evaluations_to_interaction_namespace():
+    factory = create_session_factory(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    with factory.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE evaluation_runs "
+                "(id INTEGER PRIMARY KEY, run_id TEXT)"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO evaluation_runs (run_id) VALUES ('old-run')")
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE evaluation_batches "
+                "(id INTEGER PRIMARY KEY, evaluation_id TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO evaluation_batches (evaluation_id) "
+                "VALUES ('old-batch')"
+            )
+        )
+
     init_db(factory)
-    repo = EvaluationRepository(factory)
-    barrier = Barrier(2)
 
-    def save_result(label):
-        result = _sample_result("call_concurrent")
-        result.label = label
-        barrier.wait()
-        repo.save_results("tenant_eval", "call_concurrent", [result])
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [
-            executor.submit(save_result, "PASSED"),
-            executor.submit(save_result, "FAILED"),
-        ]
-        for future in futures:
-            future.result()
-
-    results = repo.get_results("tenant_eval", "call_concurrent")
-    assert len(results) == 1
-    assert results[0].label in {"PASSED", "FAILED"}
+    with factory.kw["bind"].connect() as connection:
+        run_namespace = connection.scalar(
+            text(
+                "SELECT evaluation_namespace FROM evaluation_runs "
+                "WHERE run_id = 'old-run'"
+            )
+        )
+        batch_namespace = connection.scalar(
+            text(
+                "SELECT evaluation_namespace FROM evaluation_batches "
+                "WHERE evaluation_id = 'old-batch'"
+            )
+        )
+    assert run_namespace == "interaction"
+    assert batch_namespace == "interaction"
 
 
-def test_saves_evaluations_with_an_atomic_upsert():
+def test_service_retry_only_reruns_failed_batches_and_carries_successes():
     factory = _factory()
-    repo = EvaluationRepository(factory)
-    statements = []
-    event.listen(
-        factory.engine,
-        "before_cursor_execute",
-        lambda connection, cursor, statement, parameters, context, executemany:
-            statements.append(statement),
+    envelope = InteractionEnvelope(
+        tenant_id="tenant_eval",
+        interaction_id="call_retry",
+        schema_version="1.0",
+    )
+    with factory() as session:
+        session.add(
+            InteractionRow(
+                tenant_id=envelope.tenant_id,
+                interaction_id=envelope.interaction_id,
+                schema_version=envelope.schema_version,
+                payload_json=envelope.model_dump_json(),
+                payload_hash="test-hash",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+
+    class RetryRegistry:
+        def __init__(self):
+            self.batch_calls = []
+
+        async def evaluate_batches(
+            self,
+            interaction,
+            turns,
+            timeline=None,
+            batch_names=None,
+        ):
+            names = (
+                batch_names
+                if batch_names is not None
+                else {
+                    "conversation_understanding",
+                    "conversation_quality",
+                    "compliance_appointment",
+                }
+            )
+            self.batch_calls.append(set(names))
+            now = datetime.now(timezone.utc)
+            batches = []
+            for name in sorted(names):
+                batch = _sample_batch(f"{len(self.batch_calls)}-{name}", name)
+                batch.batch_name = name
+                if name == "conversation_quality" and len(self.batch_calls) == 1:
+                    batch.status = "failed"
+                    batch.parsed_output = None
+                    batch.review_required = True
+                    batch.error_type = "LLMRequestError"
+                if name == "compliance_appointment":
+                    batch.parsed_output = None
+                batch.started_at = now
+                batch.completed_at = now
+                batches.append(batch)
+            return EvaluationRun(
+                run_id=f"run-{len(self.batch_calls)}",
+                tenant_id=interaction.tenant_id,
+                interaction_id=interaction.interaction_id,
+                batches=batches,
+                summary={},
+                started_at=now,
+                completed_at=now,
+                review_required=any(batch.review_required for batch in batches),
+                review_reasons=[],
+            )
+
+    registry = RetryRegistry()
+    service = EvaluationService(factory, registry=registry)
+    first = service.evaluate_interaction("tenant_eval", "call_retry")
+    second = service.evaluate_interaction(
+        "tenant_eval",
+        "call_retry",
+        retry_from_run_id=first.run_id,
     )
 
-    repo.save_results("tenant_eval", "call_01", [_sample_result()])
-
-    writes = [statement.upper() for statement in statements]
-    assert any("INSERT INTO EVALUATION_RESULTS" in sql and "ON CONFLICT" in sql for sql in writes)
+    assert first.run_id != second.run_id
+    assert registry.batch_calls == [
+        {
+            "conversation_understanding",
+            "conversation_quality",
+            "compliance_appointment",
+        },
+        {"conversation_quality"},
+    ]
+    reused = next(
+        batch for batch in second.batches
+        if batch.batch_name == "conversation_understanding"
+    )
+    assert reused.source_evaluation_id == "1-conversation_understanding"
+    assert reused.evaluation_id != reused.source_evaluation_id
+    latest = service.eval_repo.get_latest_run("tenant_eval", "call_retry")
+    assert latest is not None
+    assert latest.run_id == second.run_id
+    assert service.eval_repo.get_latest_run("other_tenant", "call_retry") is None
 

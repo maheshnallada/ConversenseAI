@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +11,7 @@ from app.domain.envelope import (
     InteractionEvent,
     InteractionStatus,
 )
-from app.storage.artifacts import ArtifactStore
+from app.storage.artifacts import ArtifactStore, StoredArtifact, compute_sha256
 from app.storage.orm import ArtifactRow
 from app.validation.audio import (
     CallFilesValidationResult,
@@ -63,6 +64,48 @@ def map_call_folder(
     tenant_id: str,
     artifact_store: ArtifactStore,
 ) -> tuple[InteractionEnvelope, list[ArtifactRow], CallFilesValidationResult]:
+    envelope, artifact_rows, validation, _ = _map_call_folder(
+        folder_path,
+        tenant_id,
+        artifact_store,
+        stored_artifacts=None,
+    )
+    return envelope, artifact_rows, validation
+
+
+def map_call_folder_with_artifact_tracking(
+    folder_path: Path | str,
+    tenant_id: str,
+    artifact_store: ArtifactStore,
+    stored_artifacts: list[StoredArtifact] | None = None,
+) -> tuple[
+    InteractionEnvelope,
+    list[ArtifactRow],
+    CallFilesValidationResult,
+    list[StoredArtifact],
+]:
+    if stored_artifacts is None:
+        stored_artifacts = []
+    envelope, artifact_rows, validation, _ = _map_call_folder(
+        folder_path,
+        tenant_id,
+        artifact_store,
+        stored_artifacts=stored_artifacts,
+    )
+    return envelope, artifact_rows, validation, stored_artifacts
+
+
+def _map_call_folder(
+    folder_path: Path | str,
+    tenant_id: str,
+    artifact_store: ArtifactStore,
+    stored_artifacts: list[StoredArtifact] | None,
+) -> tuple[
+    InteractionEnvelope,
+    list[ArtifactRow],
+    CallFilesValidationResult,
+    list[StoredArtifact] | None,
+]:
     folder = Path(folder_path).resolve()
     validation = validate_call_files(folder)
 
@@ -84,17 +127,31 @@ def map_call_folder(
     artifact_rows: list[ArtifactRow] = []
     now = datetime.now(timezone.utc)
 
-    # Collect all files in folder
-    all_files = sorted(folder.iterdir(), key=lambda p: p.name)
+    tenant_call_namespace = hashlib.sha256(
+        f"{tenant_id}\0{call_id}".encode("utf-8")
+    ).hexdigest()
+    all_files = sorted(
+        (
+            path
+            for path in folder.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        ),
+        key=lambda path: path.relative_to(folder).as_posix(),
+    )
     for file_path in all_files:
-        if file_path.is_dir():
-            continue
+        relative_path = file_path.relative_to(folder)
+        digest = compute_sha256(file_path)
 
         artifact_type = _determine_artifact_type(file_path.name)
         stored = artifact_store.put_file(
             file_path,
-            relative_dest=f"{tenant_id}/{folder.name}/{file_path.name}",
+            relative_dest=(
+                f"imports/{tenant_call_namespace}/{digest}/"
+                f"{relative_path.as_posix()}"
+            ),
         )
+        if stored_artifacts is not None:
+            stored_artifacts.append(stored)
 
         validation_status = "valid"
         validation_details: dict[str, Any] = {}
@@ -194,7 +251,6 @@ def map_call_folder(
         "channel": call_data.get("channel"),
         "environment": call_data.get("environment"),
         "room": call_data.get("room"),
-        "folder_name": folder.name,
         "phone_answered": validation.phone_answered,
         "models": models,
         "meta": meta,
@@ -223,7 +279,7 @@ def map_call_folder(
         status=status,
         started_at=started_at,
         ended_at=ended_at,
-        correlation_id=folder.name,
+        correlation_id=call_key,
         trace_id=call_data.get("room"),
         participants=participants,
         events=events,
@@ -234,5 +290,5 @@ def map_call_folder(
         evaluation_refs=None,
     )
 
-    return envelope, artifact_rows, validation
+    return envelope, artifact_rows, validation, stored_artifacts
 

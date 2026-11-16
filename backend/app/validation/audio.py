@@ -73,25 +73,32 @@ def validate_call_files(folder: Path | str) -> CallFilesValidationResult:
     call_dir = Path(folder)
     errors: list[str] = []
 
-    # Required files
-    required = ["recording.wav", "call.json", "call.log", "manifest.jsonl"]
+    required = ["call.json", "recording.wav"]
     for req in required:
         if not (call_dir / req).exists():
             errors.append(f"Missing required file: {req}")
 
-    # Inspect call.json
     call_json_path = call_dir / "call.json"
     if call_json_path.exists():
         try:
             with open(call_json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            for key in ["call_id", "call_key", "started_at", "ended_at", "disposition", "end_reason"]:
-                if key not in data:
-                    errors.append(f"Missing required key in call.json: {key}")
+            if not isinstance(data, dict):
+                errors.append("call.json must contain a JSON object")
+            elif (
+                not isinstance(data.get("call_id"), str)
+                or not data["call_id"].strip()
+            ):
+                errors.append("call.json must contain a non-empty call_id")
         except Exception as exc:
             errors.append(f"Corrupt call.json: {exc}")
 
-    # Inspect call.log
+    recording_path = call_dir / "recording.wav"
+    if recording_path.exists():
+        wav_result = validate_wav(recording_path)
+        if not wav_result.is_valid:
+            errors.append(f"Invalid recording.wav: {wav_result.error}")
+
     phone_answered = False
     log_path = call_dir / "call.log"
     if log_path.exists():
@@ -102,36 +109,26 @@ def validate_call_files(folder: Path | str) -> CallFilesValidationResult:
         except Exception as exc:
             errors.append(f"Error reading call.log: {exc}")
 
-    # Inspect user manifest and WAVs
-    user_wavs = list(call_dir.glob("turn_*_user.wav"))
+    user_wavs = [
+        path
+        for path in call_dir.rglob("turn_*_user.wav")
+        if path.is_file() and not path.is_symlink()
+    ]
     user_manifest_count = 0
     manifest_path = call_dir / "manifest.jsonl"
     if manifest_path.exists():
-        try:
-            with open(manifest_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = [line.strip() for line in f if line.strip()]
-                user_manifest_count = len(lines)
-        except Exception as exc:
-            errors.append(f"Error reading manifest.jsonl: {exc}")
+        user_manifest_count = _count_manifest_entries(manifest_path, errors)
 
-    if manifest_path.exists() and len(user_wavs) != user_manifest_count:
-        errors.append(f"User WAV count ({len(user_wavs)}) does not match manifest count ({user_manifest_count})")
-
-    # Inspect agent manifest and WAVs (optional)
     agent_manifest_path = call_dir / "agent_manifest.jsonl"
     has_agent_manifest = agent_manifest_path.exists()
-    agent_wavs = list(call_dir.glob("turn_*_agent.wav"))
+    agent_wavs = [
+        path
+        for path in call_dir.rglob("turn_*_agent.wav")
+        if path.is_file() and not path.is_symlink()
+    ]
     agent_manifest_count = 0
     if has_agent_manifest:
-        try:
-            with open(agent_manifest_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = [line.strip() for line in f if line.strip()]
-                agent_manifest_count = len(lines)
-        except Exception as exc:
-            errors.append(f"Error reading agent_manifest.jsonl: {exc}")
-
-        if len(agent_wavs) != agent_manifest_count:
-            errors.append(f"Agent WAV count ({len(agent_wavs)}) does not match manifest count ({agent_manifest_count})")
+        agent_manifest_count = _count_manifest_entries(agent_manifest_path, errors)
 
     is_valid = len(errors) == 0
     return CallFilesValidationResult(
@@ -144,4 +141,27 @@ def validate_call_files(folder: Path | str) -> CallFilesValidationResult:
         phone_answered=phone_answered,
         errors=errors,
     )
+
+
+def _count_manifest_entries(path: Path, errors: list[str]) -> int:
+    count = 0
+    try:
+        with open(path, "r", encoding="utf-8") as manifest:
+            for line_number, line in enumerate(manifest, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    errors.append(f"Malformed manifest entry at line {line_number}")
+                    continue
+                if not isinstance(entry, dict):
+                    errors.append(
+                        f"Manifest entry at line {line_number} must be an object"
+                    )
+                    continue
+                count += 1
+    except OSError as exc:
+        errors.append(f"Error reading {path.name}: {exc}")
+    return count
 
