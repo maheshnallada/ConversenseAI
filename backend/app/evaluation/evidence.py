@@ -113,7 +113,12 @@ def _check_citation(
             issues.append(f"{field}: quote supplied without an evidence line")
         return
 
-    matching_turns = turns_by_line.get(line)
+    seen_ids: set[str] = set()
+    matching_turns: list[TranscriptTurn] = []
+    for t in turns_by_line.get(line, []):
+        if t.turn_id not in seen_ids:
+            seen_ids.add(t.turn_id)
+            matching_turns.append(t)
     if not matching_turns:
         issues.append(f"{field}: evidence line {line} does not exist")
         return
@@ -130,7 +135,9 @@ def _check_citation(
         return
     if not quote:
         issues.append(f"{field}: evidence quote is missing")
-    elif quote not in turn.raw_text:
+    elif quote not in turn.raw_text and (
+        not turn.playback_heard_text or quote not in turn.playback_heard_text
+    ):
         issues.append(
             f"{field}: quote is not an exact substring of evidence line {line}"
         )
@@ -174,6 +181,25 @@ def _iter_quality_citations(
             True,
         )
 
+    if result.first_thing_wrong_candidate and result.first_thing_wrong_candidate.line is not None:
+        yield (
+            "first_thing_wrong_candidate",
+            result.first_thing_wrong_candidate.line,
+            result.first_thing_wrong_candidate.quote,
+            None,
+            True,
+        )
+
+    if result.what_happened:
+        for line in result.what_happened.evidence_lines:
+            yield (
+                "what_happened",
+                line,
+                "",
+                None,
+                True,
+            )
+
 
 def _validate_result_evidence(
     batch_name: str,
@@ -183,8 +209,10 @@ def _validate_result_evidence(
     sensitive_data: list[bool],
 ) -> None:
     turns_by_line: dict[int, list[TranscriptTurn]] = {}
+    is_zero_based = bool(turns and turns[0].turn_index == 0)
     for turn in turns:
-        turns_by_line.setdefault(turn.turn_index, []).append(turn)
+        line_num = (turn.turn_index + 1) if is_zero_based else turn.turn_index
+        turns_by_line.setdefault(line_num, []).append(turn)
 
     def check(
         field: str,

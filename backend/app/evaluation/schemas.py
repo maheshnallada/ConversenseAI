@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 OutcomeLabel = Literal[
@@ -58,6 +58,19 @@ CustomerFactCategory = Literal[
     "rejection_reason",
     "other_relevant_facts",
 ]
+WhatHappenedLabel = Literal[
+    "Machine or call screener answered",
+    "Heard nothing from the agent",
+    "Agent's first words came late (over 3s)",
+    "Left during first line, said nothing",
+    "Said hello or a few words, then left",
+    "Gave a real answer, then left before an ending",
+    "Call reached an ending",
+    "Can't tell",
+]
+FirstThingWrongCategory = Literal[
+    "TECHNICAL", "CONVERSATIONAL", "COMPLIANCE", "NONE"
+]
 
 
 class StrictModel(BaseModel):
@@ -87,9 +100,19 @@ class EmotionResult(EvidenceResult):
 class CustomerFact(StrictModel):
     category: CustomerFactCategory
     field: str
-    value: Any
+    value: str
     evidence_line: int = Field(ge=1)
     quote: str = Field(min_length=1)
+    explanation: str = ""
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _coerce_value_to_str(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        return str(v)
 
 
 class ConversationUnderstandingResult(StrictModel):
@@ -166,10 +189,30 @@ class ConversationCompleteness(StrictModel):
     reason: str
 
 
+class WhatHappenedResult(StrictModel):
+    label: WhatHappenedLabel = "Can't tell"
+    evidence_lines: list[int] = Field(default_factory=list)
+    reason: str = ""
+    review_required: bool = False
+
+
+class FirstThingWrongCandidate(StrictModel):
+    line: int | None = Field(default=None, ge=1)
+    quote: str = ""
+    description: str = ""
+    category: FirstThingWrongCategory = "NONE"
+    reason: str = ""
+    review_required: bool = False
+
+
 class ConversationQualityResult(StrictModel):
     conversation_quality: ConversationQuality
     context_awareness: ContextAwareness
     conversation_completeness: ConversationCompleteness
+    what_happened: WhatHappenedResult = Field(default_factory=WhatHappenedResult)
+    first_thing_wrong_candidate: FirstThingWrongCandidate = Field(
+        default_factory=FirstThingWrongCandidate
+    )
 
 
 class ComplianceRuleResult(EvidenceResult):

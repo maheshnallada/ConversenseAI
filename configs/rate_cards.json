@@ -15,6 +15,9 @@
     "stt": {
       "pulse": {
         "per_minute": 0.006
+      },
+      "smallest": {
+        "per_minute": 0.006
       }
     },
     "tts": {
@@ -37,4 +40,3 @@
     "model": "gemini-3.5-flash-lite"
   }
 }
-

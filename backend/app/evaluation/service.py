@@ -165,6 +165,9 @@ class EvaluationService:
             "critical_issues": summary.critical_issues,
             "requires_human_review": summary.requires_human_review,
             "review_reasons": summary.review_reasons,
+            "what_happened": summary.what_happened,
+            "first_thing_wrong_line": summary.first_thing_wrong_line,
+            "first_thing_wrong_what": summary.first_thing_wrong_what,
             "appointment_validation": (
                 appointment_validation.__dict__ if appointment_validation else None
             ),

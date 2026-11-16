@@ -47,6 +47,9 @@ class EvaluationSummary:
     critical_issues: list[str]
     requires_human_review: bool
     review_reasons: list[str]
+    what_happened: str = "Can't tell"
+    first_thing_wrong_line: int | None = None
+    first_thing_wrong_what: str | None = None
 
 
 def _appointment_rules(rules: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -431,6 +434,31 @@ def derive_evaluation_summary(
             if timeline and timeline.first_conversational_failure
             else []
         )
+    quality = batch_results.get("conversation_quality")
+    quality_data = _as_mapping(quality) or {}
+    what_happened_data = _as_mapping(quality_data.get("what_happened")) or {}
+    what_happened_label: str = str(what_happened_data.get("label") or "Can't tell")
+
+    if timeline and timeline.first_technical_failure:
+        ft = timeline.first_technical_failure.failure_type
+        if ft == "NO_AGENT_AUDIO_PLAYED":
+            what_happened_label = "Heard nothing from the agent"
+        elif ft == "LATE_AGENT_OPENING" and what_happened_label in ("Can't tell", "Call reached an ending"):
+            what_happened_label = "Agent's first words came late (over 3s)"
+
+    candidate_data = _as_mapping(quality_data.get("first_thing_wrong_candidate")) or {}
+    candidate_line = candidate_data.get("line")
+    candidate_cat = candidate_data.get("category", "NONE")
+    if candidate_line is not None and candidate_cat != "NONE":
+        conversational_failures.append(
+            FailureCandidate(
+                category=str(candidate_cat).lower(),
+                failure_type=str(candidate_data.get("description") or candidate_data.get("reason") or "conversational_issue"),
+                turn_index=candidate_line,
+                severity="medium",
+                evidence=str(candidate_data.get("quote", "")),
+            )
+        )
     compliance_failures = [
         FailureCandidate(
             category="compliance",
@@ -489,6 +517,17 @@ def derive_evaluation_summary(
     else:
         overall = quality_assessment
 
+    first_thing_wrong_line = (
+        first_failure.first_failure.turn_index
+        if first_failure.first_failure and first_failure.status == "known"
+        else None
+    )
+    first_thing_wrong_what = (
+        first_failure.first_failure.failure_type
+        if first_failure.first_failure and first_failure.status == "known"
+        else None
+    )
+
     return EvaluationSummary(
         overall_assessment=overall,
         dimension_assessments=dimension_assessments,
@@ -496,4 +535,7 @@ def derive_evaluation_summary(
         critical_issues=critical_issues,
         requires_human_review=bool(review_reasons or critical_issues),
         review_reasons=review_reasons,
+        what_happened=what_happened_label,
+        first_thing_wrong_line=first_thing_wrong_line,
+        first_thing_wrong_what=first_thing_wrong_what,
     )

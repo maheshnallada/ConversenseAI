@@ -292,3 +292,73 @@ def test_async_truncated_structured_response_is_typed(monkeypatch):
 
     with pytest.raises(LLMResponseError, match="truncated"):
         asyncio.run(complete_structured([], StructuredResponse))
+
+
+def test_async_structured_call_retries_with_error_context_on_validation_error(monkeypatch):
+    _configure_llm(monkeypatch)
+    attempts = 0
+    captured_messages = []
+
+    class AsyncCompletions:
+        async def parse(self, *, messages, response_format, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            captured_messages.append(list(messages))
+            if attempts == 1:
+                with pytest.raises(ValidationError) as exc:
+                    StructuredResponse.model_validate({"wrong_field": 123})
+                raise exc.value
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            parsed=StructuredResponse(answer="corrected"),
+                            refusal=None,
+                            content='{"answer": "corrected"}',
+                        )
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5),
+            )
+
+    class AsyncSDKClient:
+        def __init__(self, **_kwargs):
+            self.beta = SimpleNamespace(chat=SimpleNamespace(completions=AsyncCompletions()))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(llm_client_module, "AsyncOpenAI", AsyncSDKClient)
+
+    completion = asyncio.run(
+        llm_client_module.complete_structured_with_usage(
+            [{"role": "user", "content": "give answer"}],
+            StructuredResponse,
+        )
+    )
+
+    assert attempts == 2
+    assert completion.result.answer == "corrected"
+    assert len(captured_messages) == 2
+    assert len(captured_messages[1]) > len(captured_messages[0])
+    retry_user_msg = captured_messages[1][-1]
+    assert retry_user_msg["role"] == "user"
+    assert "structured output schema validation" in retry_user_msg["content"]
+    assert "Field 'answer'" in retry_user_msg["content"]
+
+
+def test_async_provider_network_errors_do_not_add_error_context_to_messages(monkeypatch):
+    _configure_llm(monkeypatch)
+    captured = _mock_async_sdk_client(
+        monkeypatch,
+        error=APITimeoutError(request=SimpleNamespace()),
+    )
+
+    with pytest.raises(LLMRequestError) as error:
+        asyncio.run(complete_structured([{"role": "user", "content": "original prompt"}], StructuredResponse))
+
+    assert error.value.retryable is True
+    assert captured["request"]["messages"] == [{"role": "user", "content": "original prompt"}]

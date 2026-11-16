@@ -846,6 +846,66 @@ def test_empty_transcript_quality_scores_do_not_create_a_good_assessment():
     assert run.summary["overall_assessment"] == "Can't tell"
 
 
+def test_empty_transcript_does_not_call_llm():
+    called = False
+
+    async def structured_caller(_messages, _response_model):
+        nonlocal called
+        called = True
+        raise AssertionError("LLM should not be called when transcript is empty")
+
+    run = asyncio.run(
+        EvaluatorRegistry(structured_caller=structured_caller).evaluate_batches(
+            _batch_interaction(),
+            [],
+        )
+    )
+
+    assert called is False
+    assert len(run.batches) == 3
+    assert all(batch.status == "review_required" for batch in run.batches)
+    assert all(batch.parsed_output is None for batch in run.batches)
+    assert all(batch.raw_output is None for batch in run.batches)
+    assert run.summary["overall_assessment"] == "Can't tell"
+
+
+def test_registry_retries_with_error_context_on_evidence_validation_failure():
+    calls = []
+
+    async def structured_caller(messages, response_model):
+        calls.append(list(messages))
+        payload = _batch_payload(response_model)
+        if len(calls) == 1:
+            if response_model is ConversationUnderstandingResult:
+                payload["sentiment"]["quote"] = "not in transcript"
+        else:
+            if response_model is ConversationUnderstandingResult:
+                payload["sentiment"]["quote"] = "Not interested."
+        return response_model.model_validate(payload)
+
+    registry = EvaluatorRegistry(structured_caller=structured_caller)
+    run = asyncio.run(
+        registry.evaluate_batches(
+            _batch_interaction(),
+            [_batch_turn()],
+            batch_names={"conversation_understanding"},
+        )
+    )
+
+    assert len(calls) == 2
+    retry_messages = calls[1]
+    assert len(retry_messages) > len(calls[0])
+    last_user_message = retry_messages[-1]
+    assert last_user_message["role"] == "user"
+    assert "structured output validation error" in last_user_message["content"]
+    assert "sentiment: quote is not an exact substring" in last_user_message["content"]
+
+    batch = run.batches[0]
+    assert batch.status == "completed"
+    assert batch.review_required is False
+    assert batch.validation["evidence_valid"] is True
+
+
 def test_non_null_quality_scores_require_transcript_evidence():
     async def structured_caller(_messages, response_model):
         payload = _batch_payload(response_model)
