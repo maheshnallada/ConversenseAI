@@ -44,7 +44,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
       LLM_BASE_URL: https://api.portkey.ai/v1
-      LLM_API_KEY: D9NcL9q71jyZ9fLOxQjESwfUPiFH
+      LLM_API_KEY: KEY
       LLM_MODEL: gpt-4o-mini
       LLM_PROVIDER: "@entropy-ai"
     ports:
@@ -69,7 +69,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
       LLM_BASE_URL: https://api.portkey.ai/v1
-      LLM_API_KEY: D9NcL9q71jyZ9fLOxQjESwfUPiFH
+      LLM_API_KEY: KEY
       LLM_MODEL: gpt-4o-mini
       LLM_PROVIDER: "@entropy-ai"
     command: ["python", "-m", "app.workers.cli", "--role", "outbox"]
@@ -89,7 +89,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
       LLM_BASE_URL: https://api.portkey.ai/v1
-      LLM_API_KEY: D9NcL9q71jyZ9fLOxQjESwfUPiFH
+      LLM_API_KEY: KEY
       LLM_MODEL: gpt-4o-mini
       LLM_PROVIDER: "@entropy-ai"
     volumes:
@@ -113,7 +113,7 @@ services:
       EVALUATION_MAX_CONCURRENCY: 15
       ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
       LLM_BASE_URL: https://api.portkey.ai/v1
-      LLM_API_KEY: D9NcL9q71jyZ9fLOxQjESwfUPiFH
+      LLM_API_KEY: KEY
       LLM_MODEL: gpt-4o-mini
       LLM_PROVIDER: "@entropy-ai"
     volumes:
@@ -136,7 +136,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
       LLM_BASE_URL: https://api.portkey.ai/v1
-      LLM_API_KEY: D9NcL9q71jyZ9fLOxQjESwfUPiFH
+      LLM_API_KEY: KEY
       LLM_MODEL: gpt-4o-mini
       LLM_PROVIDER: "@entropy-ai"
     command: ["python", "-m", "app.workers.cli", "--role", "analytics"]
