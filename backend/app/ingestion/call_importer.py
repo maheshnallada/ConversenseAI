@@ -23,6 +23,7 @@ from app.ingestion.service import IngestionService, canonical_json, payload_hash
 from app.reconstruction.processor import TranscriptProcessor
 from app.storage.artifacts import ArtifactStore, StoredArtifact
 from app.storage.orm import ArtifactRow, InteractionRow
+from app.storage.stage_repo import StageRepository
 from app.storage.transcript_repo import TranscriptRepository, TranscriptTurnConflict
 from app.validation.audio import (
     CallFilesValidationResult,
@@ -64,19 +65,28 @@ class CallFolderImporter:
         session_factory,
         artifact_store: ArtifactStore,
         post_import_processor: PostImportProcessor | None = None,
+        async_mode: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._artifact_store = artifact_store
         self._ingestion = IngestionService(session_factory)
         self._transcript_processor = TranscriptProcessor()
         self._transcript_repository = TranscriptRepository(session_factory)
+        self._stage_repo = StageRepository(session_factory)
+        self._async_mode = async_mode
         self._post_import_processor = (
             post_import_processor
             if post_import_processor is not None
             else PostImportProcessor(session_factory)
         )
 
-    def import_call(self, folder_path: Path, tenant_id: str) -> CallImportResult:
+    def import_call(
+        self,
+        folder_path: Path,
+        tenant_id: str,
+        async_mode: bool | None = None,
+    ) -> CallImportResult:
+        use_async = self._async_mode if async_mode is None else async_mode
         folder = Path(folder_path)
         folder_name = folder.name
         files_count = self._count_files(folder)
@@ -187,6 +197,22 @@ class CallFolderImporter:
 
         if status not in {"created", "replayed"} or envelope is None:
             return result
+
+        if use_async:
+            self._stage_repo.record_stage_start(
+                tenant_id=tenant_id,
+                interaction_id=envelope.interaction_id,
+                stage_name="general",
+            )
+            processing = CallProcessingSummary(
+                transcript_turns=len(turns),
+                timeline_status="ready",
+                observability_status="ready",
+                evaluation_status="ready",
+                evaluation_run_id=None,
+            )
+            return replace(result, processing=processing)
+
         try:
             processing = self._post_import_processor.process_imported_call(
                 folder,

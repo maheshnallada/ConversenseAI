@@ -7,6 +7,7 @@ import InteractionsView from './views/InteractionsView';
 import DrillDownView from './views/DrillDownView';
 import BenchmarkView from './views/BenchmarkView';
 import CallImportView from './views/CallImportView';
+import ScalingView from './views/ScalingView';
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -80,6 +81,9 @@ function AppContent() {
             {activeTab === 'benchmark' && <BenchmarkView />}
             {activeTab === 'import-calls' && (
               <CallImportView onInspectCall={handleInspectCall} />
+            )}
+            {activeTab === 'scaling' && (
+              <ScalingView onInspectCall={handleInspectCall} />
             )}
           </div>
         </main>

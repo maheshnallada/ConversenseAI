@@ -44,6 +44,9 @@ from app.storage.observability_repo import ObservabilityRepository
 from app.storage.review_repo import HumanReviewRepository
 from app.storage.transcript_repo import TranscriptRepository, TranscriptTurnConflict
 from app.storage.timeline_repo import TimelineRepository
+from app.storage.stage_repo import StageRepository
+from app.queue.broker import get_message_broker
+from app.queue.dlq import DLQManager
 from app.validation.golden_benchmark import GoldenDatasetBenchmarkService
 
 logger = get_logger("conversense.api")
@@ -372,6 +375,7 @@ def create_app(
     def import_staged_calls(
         body: StagedCallImportRequest,
         tenant_id: Annotated[str, Depends(require_tenant_id)],
+        async_mode: bool = Query(default=False),
     ):
         if len(set(body.folder_ids)) != len(body.folder_ids):
             raise HTTPException(
@@ -396,7 +400,7 @@ def create_app(
 
         importer = get_call_importer()
         results = [
-            importer.import_call(folder, tenant_id)
+            importer.import_call(folder, tenant_id, async_mode=async_mode)
             for folder, _, _ in selected
         ]
         return _batch_response(results)
@@ -408,6 +412,7 @@ def create_app(
     async def upload_call_folders(
         request: Request,
         tenant_id: Annotated[str, Depends(require_tenant_id)],
+        async_mode: bool = Query(default=False),
     ):
         try:
             form = await request.form(
@@ -519,6 +524,7 @@ def create_app(
                         importer.import_call,
                         folder,
                         tenant_id,
+                        async_mode,
                     )
                     results.append(replace(result, folder_name=display_name))
             return _batch_response(results)
@@ -825,5 +831,47 @@ def create_app(
                 status_code=400,
                 detail="The configured golden dataset is invalid.",
             ) from exc
+
+    # Queue Observability, DLQ, & Scaling Endpoints
+    @app.get("/api/v1/queue/stats")
+    def get_queue_stats(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        broker = get_message_broker()
+        return broker.get_queue_stats()
+
+    @app.get("/api/v1/queue/dlq")
+    def list_dead_letters(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+        limit: int = Query(default=100, ge=1, le=1000),
+    ):
+        dlq = DLQManager(session_factory)
+        return dlq.list_dead_letters(tenant_id=tenant_id, limit=limit)
+
+    class ReplayRequest(BaseModel):
+        interaction_id: str
+        target_stage: str = "general"
+
+    @app.post("/api/v1/queue/replay")
+    def replay_dead_letter(
+        body: ReplayRequest,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        dlq = DLQManager(session_factory)
+        replayed = dlq.replay_interaction(
+            tenant_id=tenant_id,
+            interaction_id=body.interaction_id,
+            target_stage=body.target_stage,
+        )
+        return {"status": "replayed" if replayed else "failed", "interaction_id": body.interaction_id}
+
+    @app.get("/api/v1/interactions/{interaction_id}/stages")
+    def get_interaction_stages(
+        interaction_id: str,
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+    ):
+        repo = StageRepository(session_factory)
+        stages = repo.get_stages(tenant_id, interaction_id)
+        return {"tenant_id": tenant_id, "interaction_id": interaction_id, "stages": stages}
 
     return app

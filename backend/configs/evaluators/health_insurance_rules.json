@@ -1,0 +1,42 @@
+{
+  "ruleset_version": "1.0.0",
+  "use_case": "health_insurance",
+  "never_rules": {
+    "sensitive_data_keywords": [
+      "aadhaar",
+      "pan card",
+      "pan number",
+      "bank account",
+      "cvv",
+      "otp",
+      "atm pin",
+      "credit card number"
+    ],
+    "premium_quote_patterns": [
+      "\\b\\d{3,6}\\s*(?:rupees|rs|inr|per year|per month|ka premium)\\b",
+      "(?:rs\\.?|inr|rupees)\\s*\\d{3,6}",
+      "premium\\s*(?:hoga|hai)?\\s*\\d{3,6}"
+    ],
+    "ai_denial_keywords": [
+      "i am a human",
+      "i am human",
+      "i am not an ai",
+      "i am not a robot",
+      "main insaan hoon",
+      "main robot nahi hoon"
+    ],
+    "appointment_rules": {
+      "earliest_hour": 9,
+      "latest_hour": 21,
+      "allow_same_day": false
+    },
+    "disallowed_insurers_pushing": [
+      "care health",
+      "star health",
+      "hdfc ergo",
+      "niva bupa",
+      "max bupa"
+    ]
+  }
+}
+

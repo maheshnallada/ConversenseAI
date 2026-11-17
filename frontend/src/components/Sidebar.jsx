@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Radio,
   UploadCloud,
+  Cpu,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { id: 'drilldown', label: 'Call Drill-Down', icon: Search },
   { id: 'benchmark', label: 'Golden Benchmark', icon: Award },
   { id: 'import-calls', label: 'Import Calls', icon: UploadCloud },
+  { id: 'scaling', label: 'Scaling & Queues', icon: Cpu },
 ];
 
 export default function Sidebar({

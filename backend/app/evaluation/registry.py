@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from uuid import uuid4
 
+from openai import BaseModel
+
 from app.domain.envelope import InteractionEnvelope
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.domain.transcript import TranscriptTurn
