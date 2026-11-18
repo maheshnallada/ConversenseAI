@@ -18,6 +18,7 @@ def test_golden_api_routes_registered(test_app):
     routes = [r.path for r in test_app.routes]
     assert "/api/v1/golden-dataset" in routes
     assert "/api/v1/golden-dataset/benchmark" in routes
+    assert "/api/v1/golden-dataset/benchmark/export" in routes
     assert "/api/v1/golden-dataset/import" in routes
 
 
@@ -27,6 +28,7 @@ def test_golden_api_routes_registered(test_app):
         ("GET", "/api/v1/golden-dataset", None),
         ("POST", "/api/v1/golden-dataset/import", None),
         ("GET", "/api/v1/golden-dataset/benchmark", None),
+        ("GET", "/api/v1/golden-dataset/benchmark/export", None),
     ],
 )
 @pytest.mark.parametrize("tenant_header", [None, ""])
@@ -221,4 +223,82 @@ def test_benchmark_get_is_read_only_and_uses_repository_root_csv(
     assert response.status_code == 200
     assert calls == [("get", default_csv, "health_campaign")]
     assert response.json()["total_interactions"] == 1
+
+
+def test_benchmark_export_csv(test_app, tmp_path, monkeypatch):
+    root = tmp_path / "repository"
+    default_csv = _set_repository_root(monkeypatch, root)
+    default_csv.parent.mkdir(parents=True)
+    default_csv.write_text("test data", encoding="utf-8")
+    calls = []
+
+    class FakeBenchmarkService:
+        def __init__(self, _session_factory):
+            pass
+
+        def export_benchmark_csv(self, csv_path, tenant_id):
+            calls.append(("export_csv", csv_path, tenant_id))
+            return "call_id,pred_what_happened\ncall_1,Call reached an ending\n"
+
+    monkeypatch.setattr(
+        api_module,
+        "GoldenDatasetBenchmarkService",
+        FakeBenchmarkService,
+        raising=False,
+    )
+
+    response = TestClient(test_app).get(
+        "/api/v1/golden-dataset/benchmark/export",
+        headers={"X-Tenant-Id": "health_campaign"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers.get("content-disposition", "")
+    assert "call_1,Call reached an ending" in response.text
+    assert calls == [("export_csv", default_csv, "health_campaign")]
+
+
+def test_benchmark_export_json(test_app, tmp_path, monkeypatch):
+    root = tmp_path / "repository"
+    default_csv = _set_repository_root(monkeypatch, root)
+    default_csv.parent.mkdir(parents=True)
+    default_csv.write_text("test data", encoding="utf-8")
+    calls = []
+
+    sample_record = {
+        "call_id": "call_1",
+        "evaluation_status": "ready",
+        "gold_what_happened": "Call reached an ending",
+        "pred_what_happened": "Call reached an ending",
+        "what_happened_match": True,
+    }
+
+    class FakeBenchmarkService:
+        def __init__(self, _session_factory):
+            pass
+
+        def get_interaction_evaluations(self, csv_path, tenant_id):
+            calls.append(("get_evaluations", csv_path, tenant_id))
+            return [sample_record]
+
+    monkeypatch.setattr(
+        api_module,
+        "GoldenDatasetBenchmarkService",
+        FakeBenchmarkService,
+        raising=False,
+    )
+
+    response = TestClient(test_app).get(
+        "/api/v1/golden-dataset/benchmark/export?format=json",
+        headers={"X-Tenant-Id": "health_campaign"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["call_id"] == "call_1"
+    assert data[0]["what_happened_match"] is True
+    assert calls == [("get_evaluations", default_csv, "health_campaign")]
+
 

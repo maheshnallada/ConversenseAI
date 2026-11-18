@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import ConfusionMatrix from '../components/ConfusionMatrix';
-import { AlertTriangle, Award, FileText, RefreshCw, UploadCloud } from 'lucide-react';
+import { AlertTriangle, Award, Download, FileText, RefreshCw, UploadCloud } from 'lucide-react';
 
 function AvailabilityCard({ title, status }) {
   const available = status === 'available';
@@ -20,6 +20,7 @@ export default function BenchmarkView() {
   const [importResult, setImportResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -54,6 +55,27 @@ export default function BenchmarkView() {
     }
   }
 
+  async function handleExport() {
+    setExporting(true);
+    setError(null);
+    try {
+      const blob = await api.exportBenchmarkResults();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `benchmark_evaluations_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Failed to export benchmark results:', err);
+      setError(err.message || 'Failed to export evaluation results.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const dimensions = benchmark?.dimension_metrics
     ? Object.entries(benchmark.dimension_metrics)
     : [];
@@ -76,6 +98,16 @@ export default function BenchmarkView() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting || loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 transition disabled:opacity-50"
+            title="Export evaluation results for each interaction"
+          >
+            <Download className={`w-3.5 h-3.5 ${exporting ? 'animate-bounce' : ''}`} />
+            {exporting ? 'Exporting...' : 'Export results'}
+          </button>
           <button
             type="button"
             onClick={handleImportGolden}

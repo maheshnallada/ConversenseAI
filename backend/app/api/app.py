@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Optional
 from urllib.parse import unquote, urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -860,6 +860,35 @@ def create_app(
                 tenant_id,
             )
             return asdict(report)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404, detail="The configured golden dataset was not found."
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="The configured golden dataset is invalid.",
+            ) from exc
+
+    @app.get("/api/v1/golden-dataset/benchmark/export")
+    def export_golden_benchmark(
+        tenant_id: Annotated[str, Depends(require_tenant_id)],
+        format: str = Query("csv", pattern="^(csv|json)$"),
+        csv_path: Optional[str] = None,
+    ):
+        resolved_csv_path = get_golden_csv_path(csv_path)
+        service = GoldenDatasetBenchmarkService(session_factory)
+        try:
+            if format == "json":
+                results = service.get_interaction_evaluations(resolved_csv_path, tenant_id)
+                return results
+            csv_data = service.export_benchmark_csv(resolved_csv_path, tenant_id)
+            filename = f"golden_benchmark_results_{resolved_csv_path.stem}.csv"
+            return Response(
+                content=csv_data,
+                media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
         except FileNotFoundError as exc:
             raise HTTPException(
                 status_code=404, detail="The configured golden dataset was not found."
