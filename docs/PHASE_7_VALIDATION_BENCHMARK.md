@@ -23,7 +23,7 @@ The benchmark reports per-dimension accuracy, precision, recall, macro F1, suppo
 - `emotion`
 - `overall_quality`
 
-Golden dataset processing scores these four dimensions only. Narrative observability labels, conversation status, language slices, and other reference columns remain unscored. Compliance false positives and false negatives are reported separately using the `gold_never-rule_broken` label. `gold_observability_notes` and similar fields are not evaluator input.
+Golden dataset processing scores these four dimensions only. Narrative observability labels, conversation status, language slices, and other reference columns remain unscored. Compliance false positives and false negatives are reported separately using the `gold_never_rule_broken` label. `gold_observability_notes` and similar fields are not evaluator input.
 
 The loader excludes only rows whose `gold_test_flag` is explicitly `True`; `False`, `Unknown`, and blank values remain eligible. The model input is read only from `model_input_json_excluding_saved_outcome`; no `source_call_json`, `call_log`, saved outcome, or `gold_*` field is passed to the evaluator.
 

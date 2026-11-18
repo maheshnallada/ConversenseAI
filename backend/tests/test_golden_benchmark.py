@@ -24,7 +24,7 @@ HEADERS = [
     "gold_sentiment",
     "gold_emotion",
     "gold_overall",
-    "gold_never-rule_broken",
+    "gold_never_rule_broken",
     "gold_test_flag",
     "source_call_json",
     "call_log",
@@ -56,7 +56,7 @@ def _record(call_id: str, message: str = "hello", **overrides) -> dict[str, str]
         "gold_sentiment": "Neutral",
         "gold_emotion": "Neutral",
         "gold_overall": "Good",
-        "gold_never-rule_broken": "None",
+        "gold_never_rule_broken": "None",
         "gold_test_flag": "False",
     }
     row.update(overrides)
@@ -74,7 +74,7 @@ def _write_duplicate_header_csv(path):
     path.write_text(
         "call_id,model_input_json_excluding_saved_outcome,"
         "gold_correct_outcome,gold_correct_outcome,gold_sentiment,"
-        "gold_emotion,gold_overall,gold_never-rule_broken\n"
+        "gold_emotion,gold_overall,gold_never_rule_broken\n"
         "call_duplicate,not-json,Expected,Corrupted,Neutral,Neutral,Good,None\n",
         encoding="utf-8",
     )

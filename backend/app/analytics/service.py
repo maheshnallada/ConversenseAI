@@ -307,8 +307,9 @@ class AnalyticsService:
                 and "UNKNOWN" not in available_currencies
             ):
                 currency = next(iter(available_currencies))
-                total_cost = (metrics_total_cost or 0.0) + (
-                    evaluation_total_cost or 0.0
+                total_cost = round(
+                    (metrics_total_cost or 0.0) + (evaluation_total_cost or 0.0),
+                    6,
                 )
             else:
                 total_cost = None

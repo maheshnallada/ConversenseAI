@@ -98,6 +98,19 @@ def is_unqualified_acknowledgement(quote: str) -> bool:
     return normalized in _UNQUALIFIED_ACKNOWLEDGEMENTS
 
 
+
+def _normalize_for_quote_match(value: str) -> str:
+    """Normalize Unicode compatibility forms and whitespace for comparison only."""
+    normalized = unicodedata.normalize("NFKC", value or "")
+    return " ".join(normalized.split())
+
+
+def _normalized_contains(quote: str, source: str) -> bool:
+    q = _normalize_for_quote_match(quote)
+    source_normalized = _normalize_for_quote_match(source)
+    return bool(q) and q in source_normalized
+
+
 def _check_citation(
     *,
     line: int | None,
@@ -138,9 +151,11 @@ def _check_citation(
     elif quote not in turn.raw_text and (
         not turn.playback_heard_text or quote not in turn.playback_heard_text
     ):
-        issues.append(
-            f"{field}: quote is not an exact substring of evidence line {line}"
-        )
+        sources = [turn.raw_text or "", turn.playback_heard_text or ""]
+        if not any(_normalized_contains(quote, source) for source in sources):
+            issues.append(
+                f"{field}: quote is not an exact substring of evidence line {line}"
+            )
 
 
 def _iter_quality_citations(

@@ -55,8 +55,8 @@ _BATCH_MODELS = {
     "conversation_quality": ConversationQualityResult,
     "compliance_appointment": ComplianceAppointmentResult,
 }
-_PROMPT_VERSION = "1.0.0"
-_SCHEMA_VERSION = "1.0.0"
+_PROMPT_VERSION = "1.1.0"
+_SCHEMA_VERSION = "1.1.0"
 
 
 class EvaluatorRegistry:
@@ -138,21 +138,21 @@ class EvaluatorRegistry:
                     )
                 )
 
-                if outcome in {"CALLBACK_BOOKED", "APPOINTMENT_BOOKED"} or expert_call_at:
+                if outcome == "APPOINTMENT_BOOKED" and expert_call_at:
                     booking_event = {
                         "event_id": f"{interaction.interaction_id}_booking",
                         "event_type": "appointment.booked",
                         "occurred_at": occurred_at,
                         "payload": {
                             "appointment_at": expert_call_at,
-                            "outcome": outcome or "CALLBACK_BOOKED",
+                            "outcome": outcome,
                             "commitments": end_call.get("commitments", []),
                             "summary": end_call.get("summary"),
                             "closing_line": end_call.get("closing_line"),
                             "record": rec,
                         },
                     }
-                elif outcome == "CALL_LATER" or call_later_at:
+                elif outcome in {"CALLBACK_BOOKED", "CALL_LATER"} or call_later_at:
                     booking_event = {
                         "event_id": f"{interaction.interaction_id}_callback",
                         "event_type": "callback.scheduled",
@@ -552,37 +552,37 @@ class EvaluatorRegistry:
                 compliance=Compliance(
                     rule_results=ComplianceRules(
                         NR001=ComplianceRuleResult(
-                            status="NOT_DETECTED",
+                            status="NOT_EVALUABLE",
                             reason=reason_label,
                             evidence_line=None,
                             quote="",
                         ),
                         NR002=ComplianceRuleResult(
-                            status="NOT_DETECTED",
+                            status="NOT_EVALUABLE",
                             reason=reason_label,
                             evidence_line=None,
                             quote="",
                         ),
                         NR003=ComplianceRuleResult(
-                            status="NOT_DETECTED",
+                            status="NOT_EVALUABLE",
                             reason=reason_label,
                             evidence_line=None,
                             quote="",
                         ),
                         NR004=ComplianceRuleResult(
-                            status="NOT_DETECTED",
+                            status="NOT_EVALUABLE",
                             reason=reason_label,
                             evidence_line=None,
                             quote="",
                         ),
                         NR005=ComplianceRuleResult(
-                            status="NOT_DETECTED",
+                            status="NOT_EVALUABLE",
                             reason=reason_label,
                             evidence_line=None,
                             quote="",
                         ),
                         NR006=ComplianceRuleResult(
-                            status="NOT_DETECTED",
+                            status="NOT_EVALUABLE",
                             reason=reason_label,
                             evidence_line=None,
                             quote="",

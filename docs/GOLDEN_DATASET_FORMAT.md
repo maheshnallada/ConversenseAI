@@ -14,7 +14,7 @@ The loader reads these supplied dataset columns:
 | `gold_sentiment` | Ground-truth sentiment label. |
 | `gold_emotion` | Ground-truth emotion label. |
 | `gold_overall` | Ground-truth overall-quality label. |
-| `gold_never-rule_broken` | Use `None` when no never-rule was broken; any other non-empty value marks a violation for aggregate compliance metrics. |
+| `gold_never_rule_broken` | Use `None` when no never-rule was broken; any other non-empty value marks a violation for aggregate compliance metrics. |
 | `gold_test_flag` | Exclude a record only when this value is explicitly `True`; `False`, `Unknown`, and blank values are included. |
 | `manifest_jsonl`, `agent_manifest_jsonl` | Optional supporting input metadata used to reconstruct canonical turns and scope the input hash. |
 | `gold_what_happened`, `gold_facts_the_customer_gave`, `gold_first_thing_wrong_line`, `gold_first_thing_wrong_what`, `gold_human_review_notes`, `gold_observability_notes` | Human or narrative reference only; not scored. |

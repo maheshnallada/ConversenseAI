@@ -135,10 +135,11 @@ export const api = {
   getEvaluations: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/evaluations`, { headers: { 'X-Tenant-Id': tenant } }),
 
-  evaluate: (id, tenant = 'health_campaign') =>
+  evaluate: (id, retryFromRunId = null, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/evaluate`, {
       method: 'POST',
       headers: { 'X-Tenant-Id': tenant },
+      body: retryFromRunId ? JSON.stringify({ retry_from_run_id: retryFromRunId }) : undefined,
     }),
 
   getAudioUrl: async (id, tenant = 'health_campaign') => {
@@ -172,6 +173,24 @@ export const api = {
   /** @returns {Promise<BenchmarkReport>} */
   getBenchmark: (tenant = 'health_campaign') =>
     request('/golden-dataset/benchmark', { headers: { 'X-Tenant-Id': tenant } }),
+
+  /** @returns {Promise<Blob>} */
+  exportBenchmarkResults: async (format = 'csv', tenant = 'health_campaign') => {
+    const res = await fetch(`${BASE_URL}/golden-dataset/benchmark/export?format=${encodeURIComponent(format)}`, {
+      headers: { 'X-Tenant-Id': tenant },
+    });
+    if (!res.ok) {
+      let errDetail = `${res.status} ${res.statusText}`;
+      try {
+        const errJson = await res.json();
+        errDetail = errJson.detail || errJson.message || errDetail;
+      } catch {
+        // ignore
+      }
+      throw new Error(errDetail);
+    }
+    return await res.blob();
+  },
 
   /** @returns {Promise<GoldenBenchmarkImportResult>} */
   importGolden: (csvPath = null, tenant = 'health_campaign') =>

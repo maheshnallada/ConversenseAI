@@ -191,7 +191,7 @@ def test_golden_import_route_returns_summary_errors_and_report(
 ):
     csv_path = (
         Path(__file__).resolve().parents[2]
-        / "Conversense_AI_50_Records_Input_and_Golden.csv"
+        / "Conversense_AI_50_Records_Input_and_Golden_Clean.csv"
     )
     expected = GoldenBenchmarkImportResult(
         dataset_hash="dataset-hash",

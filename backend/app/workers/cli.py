@@ -7,6 +7,10 @@ import sys
 import threading
 import time
 
+from app.core.env import load_env_file
+
+load_env_file()
+
 from app.core.logging import configure_logging
 from app.queue.broker import get_message_broker
 from app.queue.limiter import get_concurrency_limiter
