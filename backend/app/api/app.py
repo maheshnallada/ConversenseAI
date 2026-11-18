@@ -294,6 +294,12 @@ def create_app(
 
         @app.get("/")
         @app.get("/dashboard")
+        @app.get("/overview")
+        @app.get("/interactions")
+        @app.get("/drilldown")
+        @app.get("/benchmark")
+        @app.get("/import-calls")
+        @app.get("/scaling")
         def serve_dashboard():
             return FileResponse(
                 static_dir / "index.html",
@@ -321,7 +327,34 @@ def create_app(
 
     def get_golden_csv_path(requested_path: str | None = None) -> Path:
         root = Path(__file__).resolve().parent.parent.parent.parent
-        csv_path = root / "Conversense_AI_25_Records_Input_and_Golden.csv"
+        env_override = os.getenv("GOLDEN_DATASET_PATH")
+        candidate_names = [
+            "Conversense_AI_50_Records_Input_and_Golden.csv",
+            "Conversense_AI_25_Records_Input_and_Golden.csv",
+        ]
+        candidate_dirs = [
+            root,
+            root / "data",
+            Path("/app/data"),
+            Path("/app"),
+        ]
+        if env_override:
+            csv_path = Path(env_override)
+            if not csv_path.is_absolute():
+                csv_path = root / csv_path
+        else:
+            csv_path = None
+            for name in candidate_names:
+                for directory in candidate_dirs:
+                    candidate = directory / name
+                    if candidate.is_file():
+                        csv_path = candidate
+                        break
+                if csv_path:
+                    break
+            if csv_path is None:
+                csv_path = (root / "data" / candidate_names[0]) if (root / "data").exists() else (root / candidate_names[0])
+
         if csv_path.is_symlink():
             raise HTTPException(
                 status_code=400,
@@ -331,8 +364,12 @@ def create_app(
             requested = Path(requested_path)
             if not requested.is_absolute():
                 requested = root / requested
+            allowed_names = set(candidate_names) | {csv_path.name}
             try:
-                matches_configured_file = requested.resolve() == csv_path.resolve()
+                matches_configured_file = (
+                    requested.resolve() == csv_path.resolve()
+                    or (requested.name in allowed_names and requested.is_file())
+                )
             except (OSError, RuntimeError):
                 matches_configured_file = False
             if requested.is_symlink() or not matches_configured_file:
@@ -340,6 +377,7 @@ def create_app(
                     status_code=400,
                     detail="Only the configured golden dataset may be imported.",
                 )
+            csv_path = requested
         return csv_path
 
     def get_timeline_repo() -> TimelineRepository:

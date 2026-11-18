@@ -197,7 +197,9 @@ class BenchmarkEngine:
             (
                 item
                 for item in run.batches
-                if item.batch_name == batch_name and item.status == "completed"
+                if item.batch_name == batch_name
+                and item.status in ("completed", "review_required")
+                and item.parsed_output is not None
             ),
             None,
         )
@@ -222,7 +224,8 @@ class BenchmarkEngine:
                 item
                 for item in run.batches
                 if item.batch_name == "compliance_appointment"
-                and item.status == "completed"
+                and item.status in ("completed", "review_required")
+                and item.parsed_output is not None
             ),
             None,
         )

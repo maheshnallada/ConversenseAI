@@ -243,7 +243,56 @@ def _map_call_folder(
             )
         )
 
+    # Extract confirmed booking / callback events from meta.end_call
+    end_call = meta.get("end_call") or call_data.get("end_call")
+    if isinstance(end_call, dict):
+        rec = end_call.get("record") or {}
+        outcome = end_call.get("outcome") or rec.get("outcome")
+        expert_call_at = rec.get("expert_call_at")
+        if not expert_call_at and end_call.get("commitments"):
+            for comm in end_call.get("commitments"):
+                if isinstance(comm, dict) and comm.get("date"):
+                    expert_call_at = f"{comm.get('date')}T11:00:00+05:30"
+                    break
+        if outcome == "CALLBACK_BOOKED" or expert_call_at:
+            events.append(
+                InteractionEvent(
+                    event_id=f"{call_id}_booking",
+                    event_type="appointment.booked",
+                    occurred_at=ended_at or started_at,
+                    payload={
+                        "appointment_at": expert_call_at,
+                        "outcome": outcome,
+                        "commitments": end_call.get("commitments", []),
+                        "summary": end_call.get("summary"),
+                        "closing_line": end_call.get("closing_line"),
+                        "record": rec,
+                    },
+                )
+            )
+        elif outcome == "CALL_LATER" or rec.get("call_later_at"):
+            events.append(
+                InteractionEvent(
+                    event_id=f"{call_id}_callback",
+                    event_type="callback.scheduled",
+                    occurred_at=ended_at or started_at,
+                    payload={
+                        "call_later_at": rec.get("call_later_at"),
+                        "outcome": outcome,
+                        "commitments": end_call.get("commitments", []),
+                        "summary": end_call.get("summary"),
+                        "closing_line": end_call.get("closing_line"),
+                        "record": rec,
+                    },
+                )
+            )
+
     # Domain Data
+    tz_val = call_data.get("timezone") or meta.get("timezone")
+    if not tz_val:
+        if (started_at and getattr(started_at, "tzinfo", None) and started_at.strftime("%z") == "+0530") or tenant_id == "health_campaign":
+            tz_val = "Asia/Kolkata"
+
     domain_data = {
         "disposition": call_data.get("disposition"),
         "end_reason": call_data.get("end_reason"),
@@ -251,6 +300,7 @@ def _map_call_folder(
         "channel": call_data.get("channel"),
         "environment": call_data.get("environment"),
         "room": call_data.get("room"),
+        "timezone": tz_val,
         "phone_answered": validation.phone_answered,
         "models": models,
         "meta": meta,

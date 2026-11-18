@@ -261,6 +261,17 @@ class EvaluationService:
             if isinstance(domain_data, dict)
             else None
         ) or meta.get("timezone")
+
+        if not timezone_name or timezone_name == "unknown":
+            if envelope.started_at and envelope.started_at.tzinfo:
+                tz_str = str(envelope.started_at.tzinfo)
+                if "+05:30" in tz_str or "UTC+05:30" in tz_str:
+                    timezone_name = "Asia/Kolkata"
+                else:
+                    timezone_name = tz_str
+            else:
+                timezone_name = "Asia/Kolkata"
+
         booking_event = next(
             (
                 event.model_dump(mode="python")
@@ -269,6 +280,62 @@ class EvaluationService:
             ),
             None,
         )
+
+        if booking_event is None:
+            end_call = meta.get("end_call") or domain_data.get("end_call")
+            if isinstance(end_call, dict):
+                outcome = str(end_call.get("outcome") or "").strip().upper()
+                rec = (
+                    end_call.get("record")
+                    if isinstance(end_call.get("record"), dict)
+                    else {}
+                )
+                expert_call_at = (
+                    rec.get("expert_call_at")
+                    or end_call.get("expert_call_at")
+                    or rec.get("appointment_at")
+                    or end_call.get("appointment_at")
+                )
+                call_later_at = rec.get("call_later_at") or end_call.get("call_later_at")
+
+                occurred_at = (
+                    envelope.ended_at.isoformat()
+                    if envelope.ended_at
+                    else (
+                        envelope.started_at.isoformat()
+                        if envelope.started_at
+                        else None
+                    )
+                )
+
+                if outcome in {"CALLBACK_BOOKED", "APPOINTMENT_BOOKED"} or expert_call_at:
+                    booking_event = {
+                        "event_id": f"{envelope.interaction_id}_booking",
+                        "event_type": "appointment.booked",
+                        "occurred_at": occurred_at,
+                        "payload": {
+                            "appointment_at": expert_call_at,
+                            "outcome": outcome or "CALLBACK_BOOKED",
+                            "commitments": end_call.get("commitments", []),
+                            "summary": end_call.get("summary"),
+                            "closing_line": end_call.get("closing_line"),
+                            "record": rec,
+                        },
+                    }
+                elif outcome == "CALL_LATER" or call_later_at:
+                    booking_event = {
+                        "event_id": f"{envelope.interaction_id}_callback",
+                        "event_type": "callback.scheduled",
+                        "occurred_at": occurred_at,
+                        "payload": {
+                            "callback_at": call_later_at,
+                            "outcome": outcome or "CALL_LATER",
+                            "commitments": end_call.get("commitments", []),
+                            "summary": end_call.get("summary"),
+                            "closing_line": end_call.get("closing_line"),
+                            "record": rec,
+                        },
+                    }
         rules_path = _find_rules_path()
         with rules_path.open("r", encoding="utf-8") as file:
             config = json.load(file)

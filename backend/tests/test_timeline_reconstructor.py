@@ -121,3 +121,83 @@ def test_reconstruction_keeps_unknown_duration_and_supplied_event_evidence():
     assert persisted.reconciliation == timeline.reconciliation
     assert persisted.failures == timeline.failures
 
+
+def test_reconstruction_creates_booking_event_from_metadata():
+    turn = TranscriptTurn(
+        turn_id="turn-1",
+        interaction_id="call-booking",
+        tenant_id="tenant-rec",
+        turn_index=0,
+        speaker="agent",
+        raw_text="The appointment is confirmed.",
+        normalized_text="the appointment is confirmed.",
+        start_s=0.5,
+        end_s=3.0,
+    )
+    meta = {
+        "connected_s": 15.5,
+        "end_call": {
+            "outcome": "CALLBACK_BOOKED",
+            "commitments": [{"what": "expert call at 11:00", "date": "2026-11-07"}],
+            "record": {
+                "expert_call_at": "2026-11-07T11:00:00+05:30",
+            },
+            "summary": "Expert call booked",
+        },
+    }
+
+    timeline = TimelineReconstructor().reconstruct(
+        tenant_id="tenant-rec",
+        interaction_id="call-booking",
+        turns=[turn],
+        call_metadata=meta,
+    )
+
+    booking_events = [e for e in timeline.events if e.event_type == "booking"]
+    assert len(booking_events) == 1
+    booking = booking_events[0]
+    assert booking.event_id == "booking_call-booking"
+    assert booking.start_s == 15.5
+    assert booking.metadata["appointment_at"] == "2026-11-07T11:00:00+05:30"
+    assert booking.metadata["outcome"] == "CALLBACK_BOOKED"
+    assert len(booking.metadata["commitments"]) == 1
+
+
+def test_reconstruction_creates_callback_event_from_metadata():
+    turn = TranscriptTurn(
+        turn_id="turn-1",
+        interaction_id="call-later",
+        tenant_id="tenant-rec",
+        turn_index=0,
+        speaker="agent",
+        raw_text="I will call you back later.",
+        normalized_text="i will call you back later.",
+        start_s=1.0,
+        end_s=4.0,
+    )
+    meta = {
+        "connected_s": 22.0,
+        "end_call": {
+            "outcome": "CALL_LATER",
+            "commitments": [{"what": "call later at 18:00", "date": "2026-10-31"}],
+            "record": {
+                "call_later_at": "2026-10-31T18:00:00+05:30",
+            },
+        },
+    }
+
+    timeline = TimelineReconstructor().reconstruct(
+        tenant_id="tenant-rec",
+        interaction_id="call-later",
+        turns=[turn],
+        call_metadata=meta,
+    )
+
+    callback_events = [e for e in timeline.events if e.event_type == "callback"]
+    assert len(callback_events) == 1
+    callback = callback_events[0]
+    assert callback.event_id == "callback_call-later"
+    assert callback.start_s == 22.0
+    assert callback.metadata["callback_at"] == "2026-10-31T18:00:00+05:30"
+    assert callback.metadata["outcome"] == "CALL_LATER"
+

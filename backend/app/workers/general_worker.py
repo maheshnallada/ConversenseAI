@@ -73,7 +73,7 @@ class GeneralWorker:
                     tenant_id=tenant_id,
                     interaction_id=interaction_id,
                     turns=turns,
-                    call_metadata=(envelope.domain_data or {}).get("meta"),
+                    call_metadata=envelope.domain_data,
                     events=envelope.events,
                 )
                 await asyncio.to_thread(self._timeline_repo.save_timeline, timeline)

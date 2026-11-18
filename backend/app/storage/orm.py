@@ -215,7 +215,7 @@ class EvaluationRunRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
     evaluation_namespace: Mapped[str] = mapped_column(
-        String(64),
+        String(128),
         default="interaction",
         server_default="interaction",
     )
@@ -245,7 +245,7 @@ class EvaluationBatchRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
     evaluation_namespace: Mapped[str] = mapped_column(
-        String(64),
+        String(128),
         default="interaction",
         server_default="interaction",
     )
@@ -301,6 +301,8 @@ class GoldenCallLabelRow(Base):
     overall: Mapped[str] = mapped_column(String(32))
     first_thing_wrong_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     first_thing_wrong_what: Mapped[str | None] = mapped_column(Text, nullable=True)
+    first_thing_wrong_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_thing_wrong_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     never_rule_broken: Mapped[str] = mapped_column(String(128), default="None")
     reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     conversation_status: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -13,6 +13,8 @@ from starlette.responses import JSONResponse, Response
 trace_id_ctx: ContextVar[str] = ContextVar("trace_id", default="")
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")
 tenant_id_ctx: ContextVar[str] = ContextVar("tenant_id", default="")
+call_id_ctx: ContextVar[str] = ContextVar("call_id", default="")
+criteria_ctx: ContextVar[str] = ContextVar("criteria", default="")
 
 
 class StructuredJsonFormatter(logging.Formatter):
@@ -33,6 +35,12 @@ class StructuredJsonFormatter(logging.Formatter):
         trace_id = trace_id_ctx.get()
         request_id = request_id_ctx.get()
         tenant_id = tenant_id_ctx.get()
+        call_id = getattr(record, "call_id", None) or call_id_ctx.get()
+        criteria = (
+            getattr(record, "criteria", None)
+            or getattr(record, "batch_name", None)
+            or criteria_ctx.get()
+        )
 
         if trace_id:
             log_obj["trace_id"] = trace_id
@@ -40,9 +48,33 @@ class StructuredJsonFormatter(logging.Formatter):
             log_obj["request_id"] = request_id
         if tenant_id:
             log_obj["tenant_id"] = tenant_id
+        if call_id:
+            log_obj["call_id"] = call_id
+            if "interaction_id" not in log_obj and not hasattr(record, "interaction_id"):
+                log_obj["interaction_id"] = call_id
+        if criteria:
+            log_obj["criteria"] = criteria
 
         # Attach extra attributes if present
-        for key in ("method", "path", "status_code", "duration_ms", "client_ip", "interaction_id", "details"):
+        for key in (
+            "method",
+            "path",
+            "status_code",
+            "duration_ms",
+            "client_ip",
+            "interaction_id",
+            "call_id",
+            "criteria",
+            "batch_name",
+            "attempt",
+            "details",
+            "model",
+            "provider",
+            "input_tokens",
+            "output_tokens",
+            "issues",
+            "error",
+        ):
             if hasattr(record, key):
                 log_obj[key] = getattr(record, key)
 

@@ -18,17 +18,19 @@ def init_db(session_factory) -> None:
     additions = {
         "evaluation_runs": {
             "evaluation_namespace": (
-                "VARCHAR(64) NOT NULL DEFAULT 'interaction'"
+                "VARCHAR(128) NOT NULL DEFAULT 'interaction'"
             ),
         },
         "evaluation_batches": {
             "evaluation_namespace": (
-                "VARCHAR(64) NOT NULL DEFAULT 'interaction'"
+                "VARCHAR(128) NOT NULL DEFAULT 'interaction'"
             ),
         },
         "golden_dataset_labels": {
             "conversation_status": "VARCHAR(64)",
             "language_slice": "VARCHAR(64)",
+            "first_thing_wrong_category": "VARCHAR(64)",
+            "first_thing_wrong_description": "TEXT",
         },
         "human_reviews": {"evaluation_id": "VARCHAR(128)"},
     }
@@ -48,3 +50,15 @@ def init_db(session_factory) -> None:
                             f"ADD COLUMN {column_name} {column_type}"
                         )
                     )
+        if connection.dialect.name == "postgresql":
+            for table_name in ("evaluation_runs", "evaluation_batches"):
+                if inspector.has_table(table_name):
+                    try:
+                        connection.execute(
+                            text(
+                                f"ALTER TABLE {table_name} "
+                                f"ALTER COLUMN evaluation_namespace TYPE VARCHAR(128)"
+                            )
+                        )
+                    except Exception:
+                        pass

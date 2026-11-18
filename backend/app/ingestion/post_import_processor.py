@@ -75,7 +75,7 @@ class PostImportProcessor:
                     tenant_id=envelope.tenant_id,
                     interaction_id=envelope.interaction_id,
                     turns=turns,
-                    call_metadata=(envelope.domain_data or {}).get("meta"),
+                    call_metadata=envelope.domain_data,
                     events=envelope.events,
                 )
                 self._timeline_repository.save_timeline(timeline)

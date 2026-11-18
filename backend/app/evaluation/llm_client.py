@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Union
 from urllib.parse import urlparse
@@ -8,6 +9,7 @@ from urllib.parse import urlparse
 from openai import APIError, AsyncOpenAI, LengthFinishReasonError, OpenAI
 from pydantic import BaseModel, ValidationError
 
+from app.core.logging import call_id_ctx, criteria_ctx
 from app.evaluation.errors import (
     LLMConfigurationError,
     LLMRequestError,
@@ -96,6 +98,24 @@ async def complete_structured_with_usage(
     ) as client:
         for attempt in range(max_validation_retries + 1):
             raw_output = None
+            call_id = call_id_ctx.get()
+            criteria = criteria_ctx.get() or response_model.__name__
+            start_time = time.perf_counter()
+            logger.info(
+                "LLM API request starting for call_id=%s, criteria=%s (model=%s, provider=%s, attempt=%d)",
+                call_id or "unknown",
+                criteria,
+                model,
+                provider,
+                attempt + 1,
+                extra={
+                    "call_id": call_id,
+                    "criteria": criteria,
+                    "model": model,
+                    "provider": provider,
+                    "attempt": attempt + 1,
+                },
+            )
             try:
                 response = await client.beta.chat.completions.parse(
                     model=model,
@@ -110,15 +130,26 @@ async def complete_structured_with_usage(
                     provider=provider,
                 ) from None
             except APIError as error:
+                duration_ms = (time.perf_counter() - start_time) * 1000
                 status_code = getattr(error, "status_code", None)
                 err_msg = getattr(error, "message", str(error))
                 if api_key:
                     err_msg = err_msg.replace(api_key, "[redacted]")
                 logger.error(
-                    "LLM structured request failed with APIError (%s, status=%s): %s",
+                    "LLM structured request failed with APIError (%s, status=%s) for call_id=%s, criteria=%s: %s",
                     type(error).__name__,
                     status_code,
+                    call_id or "unknown",
+                    criteria,
                     err_msg,
+                    extra={
+                        "call_id": call_id,
+                        "criteria": criteria,
+                        "duration_ms": round(duration_ms, 2),
+                        "model": model,
+                        "provider": provider,
+                        "status_code": status_code,
+                    },
                 )
                 raise LLMRequestError(
                     f"Structured request failed ({type(error).__name__}: {err_msg})",
@@ -175,6 +206,8 @@ async def complete_structured_with_usage(
                 )
 
             usage = getattr(response, "usage", None)
+            inp = None
+            outp = None
             if usage:
                 inp = getattr(usage, "prompt_tokens", None)
                 outp = getattr(usage, "completion_tokens", None)
@@ -184,6 +217,25 @@ async def complete_structured_with_usage(
                 if isinstance(outp, int):
                     total_output_tokens += outp
                     tokens_tracked = True
+
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            logger.info(
+                "LLM API request succeeded for call_id=%s, criteria=%s in %.2fms (prompt_tokens=%s, completion_tokens=%s)",
+                call_id or "unknown",
+                criteria,
+                duration_ms,
+                inp,
+                outp,
+                extra={
+                    "call_id": call_id,
+                    "criteria": criteria,
+                    "duration_ms": round(duration_ms, 2),
+                    "input_tokens": inp,
+                    "output_tokens": outp,
+                    "model": model,
+                    "provider": provider,
+                },
+            )
 
             content = getattr(message, "content", None)
             raw_output = content if isinstance(content, str) else None
@@ -296,6 +348,20 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature,
         }
+        call_id = call_id_ctx.get()
+        criteria = criteria_ctx.get() or (response_format.__name__ if response_format else "chat_completion")
+        start_time = time.perf_counter()
+        logger.info(
+            "LLM sync chat_completion starting for call_id=%s, criteria=%s (model=%s)",
+            call_id or "unknown",
+            criteria,
+            self.model,
+            extra={
+                "call_id": call_id,
+                "criteria": criteria,
+                "model": self.model,
+            },
+        )
         try:
             with OpenAI(
                 api_key=self.api_key,
@@ -315,11 +381,37 @@ class LLMClient:
                             )
                             parsed = response.choices[0].message.parsed
                             if parsed is not None:
+                                duration_ms = (time.perf_counter() - start_time) * 1000
+                                logger.info(
+                                    "LLM sync chat_completion succeeded for call_id=%s, criteria=%s in %.2fms",
+                                    call_id or "unknown",
+                                    criteria,
+                                    duration_ms,
+                                    extra={
+                                        "call_id": call_id,
+                                        "criteria": criteria,
+                                        "duration_ms": round(duration_ms, 2),
+                                        "model": self.model,
+                                    },
+                                )
                                 return parsed
                             content = getattr(
                                 response.choices[0].message, "content", None
                             )
                             if content:
+                                duration_ms = (time.perf_counter() - start_time) * 1000
+                                logger.info(
+                                    "LLM sync chat_completion succeeded for call_id=%s, criteria=%s in %.2fms",
+                                    call_id or "unknown",
+                                    criteria,
+                                    duration_ms,
+                                    extra={
+                                        "call_id": call_id,
+                                        "criteria": criteria,
+                                        "duration_ms": round(duration_ms, 2),
+                                        "model": self.model,
+                                    },
+                                )
                                 return response_format.model_validate_json(content)
                             return None
                         except ValidationError as err:
@@ -340,15 +432,37 @@ class LLMClient:
                             raise
 
                 response = client.chat.completions.create(**request_args)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                logger.info(
+                    "LLM sync chat_completion succeeded for call_id=%s, criteria=%s in %.2fms",
+                    call_id or "unknown",
+                    criteria,
+                    duration_ms,
+                    extra={
+                        "call_id": call_id,
+                        "criteria": criteria,
+                        "duration_ms": round(duration_ms, 2),
+                        "model": self.model,
+                    },
+                )
                 return response.choices[0].message.content
         except Exception as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
             error_message = str(e)
             if self.api_key:
                 error_message = error_message.replace(self.api_key, "[redacted]")
             logger.warning(
-                "LLM call to %s failed (%s). Falling back to heuristic.",
+                "LLM call to %s failed (%s) for call_id=%s, criteria=%s",
                 self.base_url,
                 error_message[:1000],
+                call_id or "unknown",
+                criteria,
+                extra={
+                    "call_id": call_id,
+                    "criteria": criteria,
+                    "duration_ms": round(duration_ms, 2),
+                    "model": self.model,
+                },
             )
             return None
 

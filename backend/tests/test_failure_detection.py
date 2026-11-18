@@ -112,3 +112,64 @@ def test_detect_agent_repetition():
     assert res.first_conversational_failure.failure_type == "AGENT_REPETITION"
     assert res.first_conversational_failure.turn_index == 2
 
+
+def test_unplayed_turn_cancelled_by_customer_hangup_is_not_a_failure():
+    # Customer hung up before/as the agent turn was queued
+    t0 = _turn(0, "agent", 0.5, 2.5, spoken="heard", text="Hello?")
+    t1 = _turn(1, "customer", 3.0, 3.5, text="Haan")
+    t2 = _turn(2, "agent", 4.0, 5.5, spoken="not_played", text="Main Priya PolicyGuru se...")
+
+    turns = [t0, t1, t2]
+    call_meta = {
+        "agent_wav_count": 1,
+        "ended_at_seconds": 4.5,
+        "end_reason": "dropped",
+    }
+    res = detect_failures(turns, call_meta)
+
+    # Must NOT flag AGENT_LINE_NOT_PLAYED because customer hung up
+    assert res.first_technical_failure is None
+    assert all(f.failure_type != "AGENT_LINE_NOT_PLAYED" for f in res.all_failures)
+
+
+def test_unplayed_turn_cancelled_by_customer_interruption_is_not_a_failure():
+    # Customer spoke concurrently or right before the agent response was ready
+    t0 = _turn(0, "agent", 0.5, 2.5, spoken="heard", text="Hello?")
+    t1 = _turn(1, "customer", 5.0, 5.8, text="Abhi chal raha hai")
+    t2 = _turn(2, "agent", 5.2, 7.0, spoken="not_played", text="Accha...")
+    t3 = _turn(3, "agent", 6.5, 8.0, spoken="heard", text="Accha policy office se hai?")
+
+    turns = [t0, t1, t2, t3]
+    call_meta = {
+        "agent_wav_count": 2,
+        "ended_at_seconds": 20.0,
+        "end_reason": "ended",
+    }
+    res = detect_failures(turns, call_meta)
+
+    # Must NOT flag AGENT_LINE_NOT_PLAYED because customer interrupted/spoke concurrently
+    assert res.first_technical_failure is None
+    assert all(f.failure_type != "AGENT_LINE_NOT_PLAYED" for f in res.all_failures)
+
+
+def test_unplayed_turn_during_active_call_is_technical_failure():
+    # Call was active, customer was waiting, but agent audio never played
+    t0 = _turn(0, "agent", 0.5, 2.5, spoken="heard", text="Hello?")
+    t1 = _turn(1, "customer", 3.0, 3.5, text="Haan")
+    t2 = _turn(2, "agent", 10.0, 12.0, spoken="not_played", text="Offer suniye...")
+    t3 = _turn(3, "agent", 15.0, 17.0, spoken="heard", text="Aap sun rahe hain?")
+
+    turns = [t0, t1, t2, t3]
+    call_meta = {
+        "agent_wav_count": 2,
+        "ended_at_seconds": 30.0,
+        "end_reason": "ended",
+    }
+    res = detect_failures(turns, call_meta)
+
+    # Must flag AGENT_LINE_NOT_PLAYED because it was a genuine technical fault
+    assert res.first_technical_failure is not None
+    assert res.first_technical_failure.failure_type == "AGENT_LINE_NOT_PLAYED"
+    assert res.first_technical_failure.turn_index == 2
+
+

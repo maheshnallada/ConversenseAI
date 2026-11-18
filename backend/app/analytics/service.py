@@ -63,7 +63,9 @@ class AnalyticsService:
             (
                 item
                 for item in run.batches
-                if item.batch_name == batch_name and item.status == "completed"
+                if item.batch_name == batch_name
+                and item.status in ("completed", "review_required")
+                and item.parsed_output is not None
             ),
             None,
         )
@@ -82,7 +84,11 @@ class AnalyticsService:
             ),
             None,
         ) if run else None
-        if batch is None or batch.status != "completed" or not batch.parsed_output:
+        if (
+            batch is None
+            or batch.status not in ("completed", "review_required")
+            or not batch.parsed_output
+        ):
             return "NOT_EVALUABLE"
         compliance = batch.parsed_output.get("compliance")
         rules = compliance.get("rule_results") if isinstance(compliance, dict) else None

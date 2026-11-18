@@ -105,10 +105,16 @@ def main():
 
     factory = create_session_factory(args.db_url)
     init_db(factory)
-    csv_path = (
-        Path(__file__).resolve().parent.parent
-        / "Conversense_AI_25_Records_Input_and_Golden.csv"
-    )
+    repo_root = Path(__file__).resolve().parent.parent
+    candidate_50 = repo_root / "Conversense_AI_50_Records_Input_and_Golden.csv"
+    candidate_50_data = repo_root / "data" / "Conversense_AI_50_Records_Input_and_Golden.csv"
+    candidate_25 = repo_root / "Conversense_AI_25_Records_Input_and_Golden.csv"
+    if candidate_50.exists():
+        csv_path = candidate_50
+    elif candidate_50_data.exists():
+        csv_path = candidate_50_data
+    else:
+        csv_path = candidate_25
     dataset = load_golden_dataset(csv_path, tenant_id=args.tenant_id)
     records = [record for record in dataset.records if record.test_flag is not True]
     labels = [

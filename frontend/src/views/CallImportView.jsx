@@ -91,6 +91,7 @@ export default function CallImportView({ onInspectCall }) {
   const [lastStagedFolderIds, setLastStagedFolderIds] = useState([]);
   const [loadingStaged, setLoadingStaged] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -138,28 +139,101 @@ export default function CallImportView({ onInspectCall }) {
   }
 
   async function importStaged(folderIds, mergeFailed = false) {
+    if (!folderIds.length) return;
     setSubmitting(true);
     setError(null);
+    if (!mergeFailed) {
+      setLastStagedFolderIds(folderIds);
+      setResults({ total_calls: 0, created: 0, replayed: 0, invalid: 0, failed: 0, calls: [] });
+    }
     try {
-      const response = await api.importStagedCallFolders(folderIds);
-      if (!mergeFailed) setLastStagedFolderIds(folderIds);
-      setResults(mergeFailed ? mergeFailedResults(results, response) : response);
-    } catch (requestError) {
-      setError(requestError.message || 'The selected calls could not be imported.');
+      for (let i = 0; i < folderIds.length; i++) {
+        const folderId = folderIds[i];
+        const folderSummary = stagedCalls.find((c) => c.folder_id === folderId);
+        setProgress({
+          current: i + 1,
+          total: folderIds.length,
+          name: folderSummary?.display_name || folderId,
+        });
+        try {
+          const response = await api.importStagedCallFolders([folderId]);
+          setResults((prev) =>
+            mergeFailed ? mergeFailedResults(prev, response) : appendCallResult(prev, response),
+          );
+        } catch (requestError) {
+          const failedCall = {
+            folder_name: folderSummary?.display_name || folderId,
+            interaction_id: null,
+            status: 'failed',
+            reconstruction: { status: 'failed', error: requestError.message || 'Import failed.' },
+            observability: { status: 'failed' },
+            evaluation: { status: 'failed' },
+            error: requestError.message || 'Import failed.',
+          };
+          const failureBatch = {
+            total_calls: 1,
+            created: 0,
+            replayed: 0,
+            invalid: 0,
+            failed: 1,
+            calls: [failedCall],
+          };
+          setResults((prev) =>
+            mergeFailed ? mergeFailedResults(prev, failureBatch) : appendCallResult(prev, failureBatch),
+          );
+        }
+      }
     } finally {
+      setProgress(null);
       setSubmitting(false);
     }
   }
 
-  async function importUploads(files, mergeFailed = false) {
+  async function importUploadGroups(groups, mergeFailed = false) {
+    if (!groups.length) return;
     setSubmitting(true);
     setError(null);
+    if (!mergeFailed) {
+      setResults({ total_calls: 0, created: 0, replayed: 0, invalid: 0, failed: 0, calls: [] });
+    }
     try {
-      const response = await api.importCallFolderFiles(files);
-      setResults(mergeFailed ? mergeFailedResults(results, response) : response);
-    } catch (requestError) {
-      setError(requestError.message || 'The selected files could not be imported.');
+      for (let i = 0; i < groups.length; i++) {
+        const group = groups[i];
+        setProgress({
+          current: i + 1,
+          total: groups.length,
+          name: group.folderName,
+        });
+        try {
+          const response = await api.importCallFolderFiles(group.files);
+          setResults((prev) =>
+            mergeFailed ? mergeFailedResults(prev, response) : appendCallResult(prev, response),
+          );
+        } catch (requestError) {
+          const failedCall = {
+            folder_name: group.folderName,
+            interaction_id: null,
+            status: 'failed',
+            reconstruction: { status: 'failed', error: requestError.message || 'Import failed.' },
+            observability: { status: 'failed' },
+            evaluation: { status: 'failed' },
+            error: requestError.message || 'Import failed.',
+          };
+          const failureBatch = {
+            total_calls: 1,
+            created: 0,
+            replayed: 0,
+            invalid: 0,
+            failed: 1,
+            calls: [failedCall],
+          };
+          setResults((prev) =>
+            mergeFailed ? mergeFailedResults(prev, failureBatch) : appendCallResult(prev, failureBatch),
+          );
+        }
+      }
     } finally {
+      setProgress(null);
       setSubmitting(false);
     }
   }
@@ -185,7 +259,8 @@ export default function CallImportView({ onInspectCall }) {
       setError('More than one call.json was selected. Choose Folder batch for multiple calls.');
       return;
     }
-    importUploads(uploadFiles);
+    const groups = groupUploadFiles(uploadFiles);
+    importUploadGroups(groups);
   }
 
   function handleRetryFailed() {
@@ -201,8 +276,8 @@ export default function CallImportView({ onInspectCall }) {
       return;
     }
     const groups = groupUploadFiles(uploadFiles);
-    const retryFiles = failedIndexes.flatMap((index) => groups[index]?.files || []);
-    if (retryFiles.length) importUploads(retryFiles, true);
+    const retryGroups = failedIndexes.map((index) => groups[index]).filter(Boolean);
+    if (retryGroups.length) importUploadGroups(retryGroups, true);
   }
 
   const failedCount = results?.calls.filter((call) => !isSuccessful(call.status)).length || 0;
@@ -322,8 +397,16 @@ export default function CallImportView({ onInspectCall }) {
                 disabled={submitting}
                 className="inline-flex items-center gap-2 rounded-xl bg-cyan-700 px-4 py-2.5 text-xs font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-cyan-600 dark:hover:bg-cyan-500"
               >
-                <Upload className="h-4 w-4" />
-                {submitting ? 'Importing calls...' : 'Import selected calls'}
+                {submitting ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                {submitting
+                  ? progress
+                    ? `Processing ${progress.current} of ${progress.total}...`
+                    : 'Importing calls...'
+                  : 'Import selected calls'}
               </button>
             </form>
           ) : (
@@ -393,8 +476,16 @@ export default function CallImportView({ onInspectCall }) {
                 disabled={submitting || loadingStaged || selectedFolderIds.length === 0}
                 className="inline-flex items-center gap-2 rounded-xl bg-cyan-700 px-4 py-2.5 text-xs font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-cyan-600 dark:hover:bg-cyan-500"
               >
-                <Upload className="h-4 w-4" />
-                {submitting ? 'Importing calls...' : 'Import selected calls'}
+                {submitting ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                {submitting
+                  ? progress
+                    ? `Processing ${progress.current} of ${progress.total}...`
+                    : 'Importing calls...'
+                  : 'Import selected calls'}
               </button>
             </div>
           )}
@@ -410,24 +501,39 @@ export default function CallImportView({ onInspectCall }) {
 
       {results && (
         <section aria-live="polite" className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900/60">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
-              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                {results.total_calls} call{results.total_calls === 1 ? '' : 's'} processed:
-                {' '}{results.created} created, {results.replayed} replayed, {results.failed} failed
-              </p>
+          <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900/60">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {submitting ? (
+                  <RefreshCw className="h-4 w-4 animate-spin text-cyan-600 dark:text-cyan-400" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+                )}
+                <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                  {results.total_calls} call{results.total_calls === 1 ? '' : 's'} processed
+                  {submitting && progress ? ` (processing ${progress.current} of ${progress.total}${progress.name ? `: ${progress.name}` : ''})` : ''}:
+                  {' '}{results.created} created, {results.replayed} replayed, {results.failed} failed
+                </p>
+              </div>
+              {failedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleRetryFailed}
+                  disabled={submitting}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 disabled:opacity-50 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${submitting ? 'animate-spin' : ''}`} />
+                  Retry failed calls
+                </button>
+              )}
             </div>
-            {failedCount > 0 && (
-              <button
-                type="button"
-                onClick={handleRetryFailed}
-                disabled={submitting}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 disabled:opacity-50 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${submitting ? 'animate-spin' : ''}`} />
-                Retry failed calls
-              </button>
+            {submitting && progress && progress.total > 0 && (
+              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                <div
+                  className="h-full bg-cyan-600 transition-all duration-300 dark:bg-cyan-400"
+                  style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
+                />
+              </div>
             )}
           </div>
           <div className="space-y-3">
@@ -538,16 +644,39 @@ export default function CallImportView({ onInspectCall }) {
   );
 }
 
+function appendCallResult(previous, response) {
+  const currentCalls = previous?.calls || [];
+  const nextCalls = [...currentCalls, ...(response.calls || [])];
+  return {
+    total_calls: nextCalls.length,
+    created: (previous?.created || 0) + (response.created || 0),
+    replayed: (previous?.replayed || 0) + (response.replayed || 0),
+    invalid: (previous?.invalid || 0) + (response.invalid || 0),
+    failed: (previous?.failed || 0) + (response.failed || 0),
+    calls: nextCalls,
+  };
+}
+
 function mergeFailedResults(previous, retry) {
   if (!previous) return retry;
-  const retryCalls = [...retry.calls];
-  const calls = previous.calls.map((call) =>
-    isSuccessful(call.status) ? call : retryCalls.shift() || call,
+  const retryCallsByFolder = new Map(
+    (retry.calls || []).map((call) => [call.folder_name, call]),
   );
+  const remainingRetry = [...(retry.calls || [])];
+  const calls = previous.calls.map((call) => {
+    if (isSuccessful(call.status)) return call;
+    if (call.folder_name && retryCallsByFolder.has(call.folder_name)) {
+      const match = retryCallsByFolder.get(call.folder_name);
+      retryCallsByFolder.delete(call.folder_name);
+      return match;
+    }
+    return remainingRetry.shift() || call;
+  });
   return {
     total_calls: calls.length,
     created: calls.filter((call) => call.status === 'created').length,
     replayed: calls.filter((call) => call.status === 'replayed').length,
+    invalid: calls.filter((call) => call.status === 'invalid').length,
     failed: calls.filter((call) => !isSuccessful(call.status)).length,
     calls,
   };
