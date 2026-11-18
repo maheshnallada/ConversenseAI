@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from openai import APIError, AsyncOpenAI, LengthFinishReasonError, OpenAI
 from pydantic import BaseModel, ValidationError
 
+from app.core.env import load_env_file
 from app.core.logging import call_id_ctx, criteria_ctx
 from app.evaluation.errors import (
     LLMConfigurationError,
@@ -40,6 +41,7 @@ def _format_pydantic_validation_error(error: ValidationError) -> str:
 
 
 def _client_configuration() -> tuple[str, str, str, str, float, dict[str, str]]:
+    load_env_file()
     base_url = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1").strip().rstrip("/")
     api_key = os.getenv("LLM_API_KEY", "").strip()
     model = os.getenv("LLM_MODEL", "gpt-4o-mini").strip()
@@ -52,7 +54,8 @@ def _client_configuration() -> tuple[str, str, str, str, float, dict[str, str]]:
     if urlparse(base_url).hostname == "api.portkey.ai" and provider:
         headers["x-portkey-provider"] = f"@{provider}"
         headers["x-portkey-config"] = "pc-entrop-d0ff28"
-     
+        if api_key:
+            headers["x-portkey-api-key"] = api_key
 
     if not provider:
         provider = urlparse(base_url).hostname or "unknown"

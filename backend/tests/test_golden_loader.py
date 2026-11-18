@@ -21,7 +21,7 @@ def _write_basic_csv(path: Path, rows: list[dict[str, str]]):
         "gold_sentiment",
         "gold_emotion",
         "gold_overall",
-        "gold_never-rule_broken",
+        "gold_never_rule_broken",
         "gold_test_flag",
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
@@ -55,7 +55,7 @@ def test_golden_dataset_rejects_duplicate_headers_before_reading_rows(tmp_path: 
     csv_path.write_text(
         "call_id,model_input_json_excluding_saved_outcome,"
         "gold_correct_outcome,gold_correct_outcome,gold_sentiment,"
-        "gold_emotion,gold_overall,gold_never-rule_broken\n"
+        "gold_emotion,gold_overall,gold_never_rule_broken\n"
         "call_duplicate,not-json,Expected,Corrupted,Neutral,Neutral,Good,None\n",
         encoding="utf-8",
     )
@@ -100,7 +100,7 @@ def test_golden_dataset_accepts_missing_unknown_and_false_test_flags_and_rejects
                 "gold_sentiment": "Neutral",
                 "gold_emotion": "Neutral",
                 "gold_overall": "Good",
-                "gold_never-rule_broken": "None",
+                "gold_never_rule_broken": "None",
                 "gold_test_flag": "False",
             },
             {
@@ -110,7 +110,7 @@ def test_golden_dataset_accepts_missing_unknown_and_false_test_flags_and_rejects
                 "gold_sentiment": "Neutral",
                 "gold_emotion": "Neutral",
                 "gold_overall": "Good",
-                "gold_never-rule_broken": "None",
+                "gold_never_rule_broken": "None",
                 "gold_test_flag": "Unknown",
             },
             {
@@ -120,7 +120,7 @@ def test_golden_dataset_accepts_missing_unknown_and_false_test_flags_and_rejects
                 "gold_sentiment": "Neutral",
                 "gold_emotion": "Neutral",
                 "gold_overall": "Good",
-                "gold_never-rule_broken": "None",
+                "gold_never_rule_broken": "None",
                 "gold_test_flag": "true",
             },
             {
@@ -130,7 +130,7 @@ def test_golden_dataset_accepts_missing_unknown_and_false_test_flags_and_rejects
                 "gold_sentiment": "Neutral",
                 "gold_emotion": "Neutral",
                 "gold_overall": "Good",
-                "gold_never-rule_broken": "None",
+                "gold_never_rule_broken": "None",
             },
         ],
     )
@@ -148,7 +148,7 @@ def test_golden_dataset_accepts_missing_unknown_and_false_test_flags_and_rejects
             "gold_sentiment": "Neutral",
             "gold_emotion": "Neutral",
             "gold_overall": "Good",
-            "gold_never-rule_broken": "None",
+            "gold_never_rule_broken": "None",
         },
         {
             "call_id": "call_01",
@@ -157,11 +157,11 @@ def test_golden_dataset_accepts_missing_unknown_and_false_test_flags_and_rejects
             "gold_sentiment": "Neutral",
             "gold_emotion": "Neutral",
             "gold_overall": "Good",
-            "gold_never-rule_broken": "None",
+            "gold_never_rule_broken": "None",
         },
     ]
     with duplicate.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never-rule_broken"])
+        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never_rule_broken"])
         writer.writeheader()
         writer.writerows(rows)
 
@@ -173,7 +173,7 @@ def test_golden_dataset_reports_row_level_json_errors_and_missing_headers(tmp_pa
     good_path = tmp_path / "tmp_golden_invalid.csv"
     payload = json.dumps({"call_id": "call_02", "started_at": "2026-01-01T00:00:00+00:00", "ended_at": "2026-01-01T00:01:00+00:00", "end_reason": "ended", "channel": "phone", "environment": "staging", "meta": {}, "messages": [{"role": "assistant", "content": "hello", "t": 0.0}]})
     with good_path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never-rule_broken"])
+        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never_rule_broken"])
         writer.writeheader()
         writer.writerow({
             "call_id": "call_01",
@@ -182,7 +182,7 @@ def test_golden_dataset_reports_row_level_json_errors_and_missing_headers(tmp_pa
             "gold_sentiment": "Neutral",
             "gold_emotion": "Neutral",
             "gold_overall": "Good",
-            "gold_never-rule_broken": "None",
+            "gold_never_rule_broken": "None",
         })
         writer.writerow({
             "call_id": "call_02",
@@ -191,7 +191,7 @@ def test_golden_dataset_reports_row_level_json_errors_and_missing_headers(tmp_pa
             "gold_sentiment": "Neutral",
             "gold_emotion": "Neutral",
             "gold_overall": "Good",
-            "gold_never-rule_broken": "None",
+            "gold_never_rule_broken": "None",
         })
 
     dataset = load_golden_dataset(good_path, tenant_id="tenant_gold")
@@ -217,7 +217,7 @@ def test_golden_dataset_rejects_any_embedded_call_id_mismatch(tmp_path: Path):
         "messages": [{"role": "assistant", "content": "hello", "t": 0.0}],
     })
     with csv_path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never-rule_broken"])
+        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never_rule_broken"])
         writer.writeheader()
         writer.writerow({
             "call_id": "call_01",
@@ -226,7 +226,7 @@ def test_golden_dataset_rejects_any_embedded_call_id_mismatch(tmp_path: Path):
             "gold_sentiment": "Neutral",
             "gold_emotion": "Neutral",
             "gold_overall": "Good",
-            "gold_never-rule_broken": "None",
+            "gold_never_rule_broken": "None",
         })
 
     dataset = load_golden_dataset(csv_path, tenant_id="tenant_gold")
@@ -247,7 +247,7 @@ def test_golden_dataset_rejects_embedded_call_id_when_outer_id_is_empty(tmp_path
         "messages": [{"role": "assistant", "content": "hello", "t": 0.0}],
     })
     with csv_path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never-rule_broken"])
+        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never_rule_broken"])
         writer.writeheader()
         writer.writerow({
             "call_id": "",
@@ -256,7 +256,7 @@ def test_golden_dataset_rejects_embedded_call_id_when_outer_id_is_empty(tmp_path
             "gold_sentiment": "Neutral",
             "gold_emotion": "Neutral",
             "gold_overall": "Good",
-            "gold_never-rule_broken": "None",
+            "gold_never_rule_broken": "None",
         })
 
     dataset = load_golden_dataset(csv_path, tenant_id="tenant_gold")
@@ -279,7 +279,7 @@ def test_golden_dataset_rejects_missing_embedded_call_id_when_outer_id_is_set(tm
         "messages": [{"role": "assistant", "content": "hello", "t": 0.0}],
     })
     with csv_path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never-rule_broken"])
+        writer = csv.DictWriter(file, fieldnames=["call_id", "model_input_json_excluding_saved_outcome", "gold_correct_outcome", "gold_sentiment", "gold_emotion", "gold_overall", "gold_never_rule_broken"])
         writer.writeheader()
         writer.writerow({
             "call_id": "call_01",
@@ -288,7 +288,7 @@ def test_golden_dataset_rejects_missing_embedded_call_id_when_outer_id_is_set(tm
             "gold_sentiment": "Neutral",
             "gold_emotion": "Neutral",
             "gold_overall": "Good",
-            "gold_never-rule_broken": "None",
+            "gold_never_rule_broken": "None",
         })
 
     dataset = load_golden_dataset(csv_path, tenant_id="tenant_gold")
@@ -302,11 +302,11 @@ def test_golden_dataset_rejects_missing_embedded_call_id_when_outer_id_is_set(tm
     "rows",
     [
         [
-            "call_id,model_input_json_excluding_saved_outcome,gold_correct_outcome,gold_sentiment,gold_emotion,gold_overall,gold_never-rule_broken\n",
+            "call_id,model_input_json_excluding_saved_outcome,gold_correct_outcome,gold_sentiment,gold_emotion,gold_overall,gold_never_rule_broken\n",
             "call_01,{\"call_id\":\"call_01\",\"started_at\":\"2026-01-01T00:00:00+00:00\",\"ended_at\":\"2026-01-01T00:01:00+00:00\",\"end_reason\":\"ended\",\"channel\":\"phone\",\"environment\":\"staging\",\"meta\":{},\"messages\":[{\"role\":\"assistant\",\"content\":\"hello\",\"t\":0.0}],\"call_key\":\"c1\"},Not interested,Neutral,Neutral,Good,None\n",
         ],
         [
-            "call_id,model_input_json_excluding_saved_outcome,gold_correct_outcome,gold_sentiment,gold_emotion,gold_overall,gold_never-rule_broken\n",
+            "call_id,model_input_json_excluding_saved_outcome,gold_correct_outcome,gold_sentiment,gold_emotion,gold_overall,gold_never_rule_broken\n",
             "call_01,\"{\\\"call_id\\\":\\\"call_01\\\"}\",Not interested,Neutral,Neutral,Good,None,EXTRA\n",
         ],
     ],
@@ -330,7 +330,7 @@ def test_golden_dataset_isolates_malformed_manifest_json(tmp_path: Path):
         "gold_sentiment",
         "gold_emotion",
         "gold_overall",
-        "gold_never-rule_broken",
+        "gold_never_rule_broken",
     ]
     valid_payload = {
         "call_id": "call_01",
@@ -355,7 +355,7 @@ def test_golden_dataset_isolates_malformed_manifest_json(tmp_path: Path):
         "gold_sentiment": "Neutral",
         "gold_emotion": "Neutral",
         "gold_overall": "Good",
-        "gold_never-rule_broken": "None",
+        "gold_never_rule_broken": "None",
     }
     bad_row = {
         "call_id": "call_01",
@@ -366,7 +366,7 @@ def test_golden_dataset_isolates_malformed_manifest_json(tmp_path: Path):
         "gold_sentiment": "Neutral",
         "gold_emotion": "Neutral",
         "gold_overall": "Good",
-        "gold_never-rule_broken": "None",
+        "gold_never_rule_broken": "None",
     }
     with csv_path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)

@@ -137,7 +137,7 @@ class EvaluationService:
             retry_batches = {
                 batch.batch_name
                 for batch in previous_run.batches
-                if batch.status == "failed"
+                if batch.status in {"failed", "review_required"}
             }
 
         evaluated_run = await self.registry.evaluate_batches(
@@ -155,7 +155,8 @@ class EvaluationService:
                     source_evaluation_id=batch.evaluation_id,
                 )
                 for batch in previous_run.batches
-                if batch.batch_name not in evaluated_names and batch.status != "failed"
+                if batch.batch_name not in evaluated_names
+                and batch.status not in {"failed", "review_required"}
             ]
             evaluated_run.batches = carried_forward + evaluated_run.batches
 
@@ -170,7 +171,8 @@ class EvaluationService:
         available_results = {
             batch.batch_name: batch.parsed_output
             for batch in evaluated_run.batches
-            if batch.status == "completed" and batch.parsed_output is not None
+            if batch.status in {"completed", "review_required"}
+            and batch.parsed_output is not None
         }
         summary = derive_evaluation_summary(
             available_results,
@@ -308,21 +310,21 @@ class EvaluationService:
                     )
                 )
 
-                if outcome in {"CALLBACK_BOOKED", "APPOINTMENT_BOOKED"} or expert_call_at:
+                if outcome == "APPOINTMENT_BOOKED" and expert_call_at:
                     booking_event = {
                         "event_id": f"{envelope.interaction_id}_booking",
                         "event_type": "appointment.booked",
                         "occurred_at": occurred_at,
                         "payload": {
                             "appointment_at": expert_call_at,
-                            "outcome": outcome or "CALLBACK_BOOKED",
+                            "outcome": outcome,
                             "commitments": end_call.get("commitments", []),
                             "summary": end_call.get("summary"),
                             "closing_line": end_call.get("closing_line"),
                             "record": rec,
                         },
                     }
-                elif outcome == "CALL_LATER" or call_later_at:
+                elif outcome in {"CALLBACK_BOOKED", "CALL_LATER"} or call_later_at:
                     booking_event = {
                         "event_id": f"{envelope.interaction_id}_callback",
                         "event_type": "callback.scheduled",

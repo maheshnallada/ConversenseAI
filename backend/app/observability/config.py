@@ -42,6 +42,15 @@ def _is_positive_finite(value: float | None) -> bool:
     )
 
 
+def _is_non_negative_finite(value: float | None) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
 class RateCardManager:
     def __init__(self, config_path: Path | str | None = None) -> None:
         if config_path is None:
@@ -124,6 +133,9 @@ class RateCardManager:
             return None
 
         clean_model = model_name.lower().split("/")[-1].strip()
+        if clean_model in ("deterministic", "none", "rule-based"):
+            return 0.0
+
         llm_rates = self.rates.get("llm", {})
         rate = llm_rates.get(clean_model)
         if not rate:
@@ -142,7 +154,7 @@ class RateCardManager:
         audio_s: float | None,
         provider: str | None = None,
     ) -> float | None:
-        if not _is_positive_finite(audio_s) or provider is None:
+        if not _is_non_negative_finite(audio_s) or provider is None:
             return None
         stt_rates = self.rates.get("stt", {})
         rate = stt_rates.get(provider)
@@ -156,7 +168,7 @@ class RateCardManager:
         audio_s: float | None,
         model: str | None = None,
     ) -> float | None:
-        if not _is_positive_finite(audio_s) or model is None:
+        if not _is_non_negative_finite(audio_s) or model is None:
             return None
         tts_rates = self.rates.get("tts", {})
         rate = tts_rates.get(model)
@@ -170,7 +182,7 @@ class RateCardManager:
         connected_s: float | None,
         channel: str | None = None,
     ) -> float | None:
-        if not _is_positive_finite(connected_s) or channel is None:
+        if not _is_non_negative_finite(connected_s) or channel is None:
             return None
         phone_rates = self.rates.get("telephony", {})
         rate = phone_rates.get(channel)

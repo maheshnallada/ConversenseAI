@@ -186,6 +186,8 @@ def load_golden_dataset(csv_path: Path | str, tenant_id: str = "tenant_default")
                     f"Duplicate CSV header names: {sorted(duplicate_headers)}"
                 )
             missing_headers = sorted(REQUIRED_HEADERS - set(fieldnames))
+            if "gold_never-rule_broken" in missing_headers and "gold_never_rule_broken" in fieldnames:
+                missing_headers.remove("gold_never-rule_broken")
             if not fieldnames or missing_headers:
                 raise ValueError(f"Missing required golden dataset headers: {missing_headers}")
 

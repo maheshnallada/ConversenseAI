@@ -31,7 +31,7 @@ def _write_supplied_dataset(path: Path) -> None:
         "gold_sentiment",
         "gold_emotion",
         "gold_overall",
-        "gold_never-rule_broken",
+        "gold_never_rule_broken",
         "gold_test_flag",
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
@@ -60,7 +60,7 @@ def _write_supplied_dataset(path: Path) -> None:
                     "gold_sentiment": "Neutral",
                     "gold_emotion": "Neutral",
                     "gold_overall": "Good",
-                    "gold_never-rule_broken": "None",
+                    "gold_never_rule_broken": "None",
                     "gold_test_flag": "False",
                 }
             )

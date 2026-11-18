@@ -171,3 +171,34 @@ def test_nonfinite_usage_values_are_unavailable():
         "gemini-3.5-flash-lite", input_tokens=True, output_tokens=1
     ) is None
 
+
+def test_deterministic_and_zero_duration_costs():
+    manager = RateCardManager()
+
+    # Deterministic evaluation has zero cost
+    assert manager.calculate_llm_cost("deterministic", 0, 0) == 0.0
+    assert manager.calculate_llm_cost("none", 0, 0) == 0.0
+    assert manager.calculate_llm_cost("rule-based", 0, 0) == 0.0
+
+    # Zero duration audio is free ($0.00), not unavailable (None)
+    assert manager.calculate_stt_cost(0.0, provider="smallest") == 0.0
+    assert manager.calculate_tts_cost(0.0, model="lightning-v3.1") == 0.0
+    assert manager.calculate_telephony_cost(0.0, channel="phone") == 0.0
+
+    # Interaction with 0.0 TTS audio produces a valid total
+    breakdown = manager.calculate_interaction_cost(
+        model_name="gemini-3.5-flash-lite",
+        input_tokens=8413,
+        output_tokens=31,
+        stt_audio_s=23.82,
+        tts_audio_s=0.0,
+        connected_s=23.82,
+        tts_model="lightning-v3.1",
+        stt_provider="smallest",
+        telephony_channel="phone",
+    )
+    assert breakdown.tts_cost == 0.0
+    assert breakdown.total_cost is not None
+    assert round(breakdown.total_cost, 6) == 0.008953
+
+

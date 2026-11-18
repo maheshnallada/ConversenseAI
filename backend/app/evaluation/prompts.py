@@ -739,6 +739,12 @@ Before returning the label:
 - Verify that identity confirmation/greeting has not been mistaken for a substantive
   answer.
 - Verify that a substantive customer answer has not been mistaken for a completed call.
+- A customer asking "Which company is calling?", "Who are you?", or "What is this offer?"
+  is asking an introductory clarification question, not giving an insurance fact and
+  not explicitly rejecting the offer. If the customer then leaves before substantive
+  discussion, use "Said hello or a few words, then left".
+- "Can't tell" is not evidence that the customer disconnected. Do not derive a
+  departure category from an unknown outcome or NO_MEANINGFUL_INTERACTION alone.
 - Return exactly one allowed label and no additional lifecycle label.
 
 E. FIRST THING WRONG — TRANSCRIPT-GROUNDED CANDIDATE
@@ -786,6 +792,10 @@ F. EVIDENCE
   * Technical failures: NO_AGENT_RESPONSE, LATE_AGENT_RESPONSE, AGENT_AUDIO_NOT_PLAYED, AGENT_AUDIO_CUT_OFF, LONG_AGENT_RESPONSE_DELAY
   * Conversational failures: AGENT_REPEATED_QUESTION, IGNORED_CUSTOMER_INFORMATION, IRRELEVANT_AGENT_RESPONSE, CONTRADICTORY_AGENT_RESPONSE, POOR_OBJECTION_HANDLING, INAPPROPRIATE_CLOSING, CUSTOMER_INTERRUPTED_AGENT (use CUSTOMER_INTERRUPTED_AGENT only when evidence shows an actual failure, such as an incomplete agent response or failure to recover)
   * Compliance failures: POLICY_OR_INSURER_PUSHING, PREMIUM_FIGURE_DISCLOSURE, BOOKING_WITHOUT_CONSENT, SENSITIVE_INFORMATION_REQUEST, AI_IDENTITY_DENIAL
+  * Additional benchmark categories:
+    - IDENTITY_OR_AUTHORIZATION_UNCLEAR: intended customer's identity/authority is unresolved; use only when it is the earliest material issue.
+    - INAPPROPRIATE_POST_BOOKING_QUESTION: agent asks an unnecessary or inappropriate question after an appointment is already established.
+    - UNCLEAR_CONVERSATION: evidence is too ambiguous for a more specific category; set review_required=true.
   * Other / Neutral: OTHER, NONE, UNKNOWN
 - Do not return only an enum: provide category, line, quote, description, evidence_lines, and source ('conversation').
 - If no issue is found, return category "NONE", null line, and empty quote. Python cross-validates chronological ordering with technical and compliance findings.

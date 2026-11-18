@@ -329,8 +329,10 @@ def create_app(
         root = Path(__file__).resolve().parent.parent.parent.parent
         env_override = os.getenv("GOLDEN_DATASET_PATH")
         candidate_names = [
-            "Conversense_AI_50_Records_Input_and_Golden.csv",
+            "Conversense_AI_50_Records_Input_and_Golden_Clean.csv",
             "Conversense_AI_25_Records_Input_and_Golden.csv",
+            "Conversense_AI_50_Records_Input_and_Golden_Clean.csv",
+            "Conversense_AI_25_Records_Input_and_Golden_Clean.csv",
         ]
         candidate_dirs = [
             root,

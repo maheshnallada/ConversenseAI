@@ -106,8 +106,8 @@ def main():
     factory = create_session_factory(args.db_url)
     init_db(factory)
     repo_root = Path(__file__).resolve().parent.parent
-    candidate_50 = repo_root / "Conversense_AI_50_Records_Input_and_Golden.csv"
-    candidate_50_data = repo_root / "data" / "Conversense_AI_50_Records_Input_and_Golden.csv"
+    candidate_50 = repo_root / "Conversense_AI_50_Records_Input_and_Golden_Clean.csv"
+    candidate_50_data = repo_root / "data" / "Conversense_AI_50_Records_Input_and_Golden_Clean.csv"
     candidate_25 = repo_root / "Conversense_AI_25_Records_Input_and_Golden.csv"
     if candidate_50.exists():
         csv_path = candidate_50

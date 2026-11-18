@@ -3,18 +3,6 @@ import { api } from '../api/client';
 import ConfusionMatrix from '../components/ConfusionMatrix';
 import { AlertTriangle, Award, Download, FileText, RefreshCw, UploadCloud } from 'lucide-react';
 
-function AvailabilityCard({ title, status }) {
-  const available = status === 'available';
-  return (
-    <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
-      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{title}</p>
-      <p className={`mt-2 text-sm font-bold ${available ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
-        {available ? 'Available' : 'Unavailable'}
-      </p>
-    </div>
-  );
-}
-
 export default function BenchmarkView() {
   const [benchmark, setBenchmark] = useState(null);
   const [importResult, setImportResult] = useState(null);
@@ -195,7 +183,7 @@ export default function BenchmarkView() {
         <p className="p-8 text-center text-sm text-slate-500">No golden benchmark data is available.</p>
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
               <p className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
                 <FileText className="w-4 h-4 text-cyan-600" /> Golden interactions
@@ -204,14 +192,6 @@ export default function BenchmarkView() {
                 {benchmark.total_interactions}
               </p>
             </div>
-            <AvailabilityCard
-              title="Conversation completeness labels"
-              status={benchmark.details?.availability?.conversation_status}
-            />
-            <AvailabilityCard
-              title="Language-slice labels"
-              status={benchmark.details?.availability?.language_slice}
-            />
             <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
               <p className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
                 <AlertTriangle className="w-4 h-4 text-rose-600" /> Compliance false negatives

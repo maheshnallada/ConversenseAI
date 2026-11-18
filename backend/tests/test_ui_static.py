@@ -164,8 +164,6 @@ def test_benchmark_uses_explicit_label_availability_without_seeding_or_threshold
         REPOSITORY_ROOT / "frontend" / "src" / "api" / "client.js"
     ).read_text(encoding="utf-8")
 
-    assert "benchmark.details?.availability?.conversation_status" in source
-    assert "benchmark.details?.availability?.language_slice" in source
     assert "language_slice_metrics" in source
     assert "const result = await api.importGolden()" in source
     assert "setBenchmark(result.report)" in source

@@ -57,6 +57,9 @@ FIRST_THING_WRONG_ENUMS = {
     "SENSITIVE_INFORMATION_REQUEST",
     "AI_IDENTITY_DENIAL",
     "INAPPROPRIATE_CLOSING",
+    "IDENTITY_OR_AUTHORIZATION_UNCLEAR",
+    "INAPPROPRIATE_POST_BOOKING_QUESTION",
+    "UNCLEAR_CONVERSATION",
     "OTHER",
     "NONE",
     "UNKNOWN",
@@ -97,6 +100,9 @@ CONVERSATIONAL_MAP = {
     "CONTRADICTORY_RESPONSE": "CONTRADICTORY_AGENT_RESPONSE",
     "POOR_OBJECTION_HANDLING": "POOR_OBJECTION_HANDLING",
     "INAPPROPRIATE_CLOSING": "INAPPROPRIATE_CLOSING",
+    "IDENTITY_OR_AUTHORIZATION_UNCLEAR": "IDENTITY_OR_AUTHORIZATION_UNCLEAR",
+    "INAPPROPRIATE_POST_BOOKING_QUESTION": "INAPPROPRIATE_POST_BOOKING_QUESTION",
+    "UNCLEAR_CONVERSATION": "UNCLEAR_CONVERSATION",
     "CUSTOMER_INTERRUPTED_AGENT": "CUSTOMER_INTERRUPTED_AGENT",
     "CUSTOMER_INTERRUPTION": "CUSTOMER_INTERRUPTED_AGENT",
     "INTERRUPTION": "CUSTOMER_INTERRUPTED_AGENT",
@@ -479,90 +485,118 @@ def validate_what_happened_guard(
     batch_results: Mapping[str, Any],
     timeline: ReconstructedTimeline | None,
 ) -> str:
-    """
-    Deterministic post-LLM validation rule for 'What happened' per Section 5.3:
-    1. Check if machine or call screener answered.
-    2. Check if no agent speech played.
-    3. Check if agent's first words came late (>3s).
-    4. Check whether the customer left prematurely vs reached an ending.
-    5. If customer left and zero customer speech words: 'Left during first line, said nothing'.
-    6. If customer left and customer speech consists only of greeting, identity confirmation,
-       caller-id question, or generic acknowledgment: 'Said hello or a few words, then left'.
-    7. If customer left after at least one substantive domain answer: 'Gave a real answer, then left before an ending'.
-    8. If a terminal outcome/closing was reached: 'Call reached an ending'.
-    """
-    # 1. Machine or call screener answered
+    """Apply conservative lifecycle corrections without inferring disconnects."""
+    allowed = {
+        "Machine or call screener answered",
+        "Heard nothing from the agent",
+        "Agent's first words came late (over 3s)",
+        "Left during first line, said nothing",
+        "Said hello or a few words, then left",
+        "Gave a real answer, then left before an ending",
+        "Call reached an ending",
+        "Can't tell",
+    }
+    if current_label not in allowed:
+        current_label = "Can't tell"
+
     if outcome in ("Voicemail", "Call screener or machine"):
         return "Machine or call screener answered"
 
-    # 2. Heard nothing from agent / late opening
-    if timeline and timeline.first_technical_failure:
-        ft = timeline.first_technical_failure.failure_type
-        if ft in ("NO_AGENT_AUDIO_PLAYED", "NO_AGENT_AUDIO"):
-            return "Heard nothing from the agent"
-        if ft == "LATE_AGENT_OPENING" and current_label in ("Can't tell", "Call reached an ending"):
-            return "Agent's first words came late (over 3s)"
-
-    # 3. Check customer turns from timeline events
     understanding = _as_mapping(batch_results.get("conversation_understanding")) or {}
-    cust_facts = understanding.get("customer_facts") or []
-    has_substantive_facts = bool(cust_facts and len(cust_facts) > 0)
-
+    has_substantive_facts = bool(understanding.get("customer_facts") or [])
     quality = _as_mapping(batch_results.get("conversation_quality")) or {}
     completeness = _as_mapping(quality.get("conversation_completeness")) or {}
     conv_status = completeness.get("conversation_status")
 
-    # Determine if customer left prematurely
+    # Only explicit departure outcomes/statuses prove premature departure.
+    # "Can't tell" and NO_MEANINGFUL_INTERACTION are not proof of disconnect.
     is_premature_exit = (
-        outcome in ("No outcome: customer left first", "Can't tell")
+        outcome == "No outcome: customer left first"
         or conv_status in (
             "CUSTOMER_LEFT_DURING_OPENING",
             "CUSTOMER_LEFT_DURING_DISCUSSION",
-            "NO_MEANINGFUL_INTERACTION",
         )
     )
 
-    # Collect customer utterances
-    customer_texts: list[str] = []
     events = getattr(timeline, "events", None) or []
-    customer_turn_count = getattr(timeline, "customer_turn_count", None)
-    for ev in events:
-        if getattr(ev, "event_type", None) == "turn" and getattr(ev, "speaker", None) == "customer":
-            text = getattr(ev, "text", None)
-            if text and text.strip():
-                customer_texts.append(text.strip())
+    customer_texts = [
+        str(getattr(ev, "text", "")).strip()
+        for ev in events
+        if getattr(ev, "event_type", None) == "turn"
+        and getattr(ev, "speaker", None) == "customer"
+        and str(getattr(ev, "text", "")).strip()
+    ]
+    customer_turn_count = (
+        getattr(timeline, "customer_turn_count", None) if timeline else None
+    )
+
+    # A no-audio override needs explicit technical-failure evidence. An event
+    # cancelled after disconnect/interruption is not an agent silence failure.
+    first_technical = (
+        getattr(timeline, "first_technical_failure", None) if timeline else None
+    )
+    if first_technical is not None and not is_premature_exit:
+        failure_type = getattr(first_technical, "failure_type", "")
+        evidence = str(getattr(first_technical, "evidence", "") or "").lower()
+        if (
+            failure_type in ("NO_AGENT_AUDIO_PLAYED", "NO_AGENT_AUDIO")
+            and (
+                not evidence
+                or any(token in evidence for token in (
+                    "technical_failure_unplayed", "customer_waiting",
+                    "connected_and_waiting", "zero audio", "no audio", "unplayed"
+                ))
+            )
+        ):
+            return "Heard nothing from the agent"
+        if (
+            failure_type == "LATE_AGENT_OPENING"
+            and current_label in ("Can't tell", "Call reached an ending")
+            and any(token in evidence for token in ("over_3s", ">3s", "delay_ms"))
+        ):
+            return "Agent's first words came late (over 3s)"
 
     if is_premature_exit:
-        if customer_turn_count == 0 or (events and not customer_texts):
+        if customer_turn_count == 0:
             return "Left during first line, said nothing"
-
         if has_substantive_facts:
             return "Gave a real answer, then left before an ending"
 
         def is_introductory(text: str) -> bool:
-            cleaned = "".join(c.lower() for c in text if c.isalnum() or c.isspace()).strip()
+            cleaned = "".join(
+                c.lower() for c in text if c.isalnum() or c.isspace()
+            ).strip()
             if cleaned in INTRODUCTORY_ONLY_EXAMPLES:
                 return True
             words = cleaned.split()
-            if len(words) <= 3 and any(w in INTRODUCTORY_ONLY_EXAMPLES for w in words):
+            if len(words) <= 3 and any(
+                word in INTRODUCTORY_ONLY_EXAMPLES for word in words
+            ):
                 return True
-            if any(kw in cleaned for kw in ("bol raha", "bol rahi", "speaking", "this is", "who is")):
-                return True
-            return False
+            return any(
+                phrase in cleaned
+                for phrase in (
+                    "bol raha", "bol rahi", "speaking", "this is",
+                    "who is", "kaun bol", "kahan se", "who are you"
+                )
+            )
 
-        if customer_texts and all(is_introductory(t) for t in customer_texts):
+        if customer_texts and all(is_introductory(text) for text in customer_texts):
             return "Said hello or a few words, then left"
-
-        if current_label in ("Said hello or a few words, then left", "Gave a real answer, then left before an ending"):
+        if current_label in (
+            "Said hello or a few words, then left",
+            "Gave a real answer, then left before an ending",
+            "Left during first line, said nothing",
+        ):
             return current_label
+        return "Can't tell"
 
-        return current_label
-
-    # Terminal outcome / closing reached
-    if outcome in ("Expert call booked", "Call later agreed", "Do not call"):
-        return "Call reached an ending"
-
-    if outcome == "Not interested" and conv_status in ("COMPLETED", "OUTCOME_REACHED_BUT_NOT_CLOSED"):
+    if (
+        outcome in (
+            "Expert call booked", "Call later agreed", "Not interested", "Do not call"
+        )
+        and conv_status in ("COMPLETED", "OUTCOME_REACHED_BUT_NOT_CLOSED")
+    ):
         return "Call reached an ending"
 
     return current_label

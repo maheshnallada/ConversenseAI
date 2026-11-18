@@ -135,10 +135,11 @@ export const api = {
   getEvaluations: (id, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/evaluations`, { headers: { 'X-Tenant-Id': tenant } }),
 
-  evaluate: (id, tenant = 'health_campaign') =>
+  evaluate: (id, retryFromRunId = null, tenant = 'health_campaign') =>
     request(`/interactions/${encodeURIComponent(id)}/evaluate`, {
       method: 'POST',
       headers: { 'X-Tenant-Id': tenant },
+      body: retryFromRunId ? JSON.stringify({ retry_from_run_id: retryFromRunId }) : undefined,
     }),
 
   getAudioUrl: async (id, tenant = 'health_campaign') => {

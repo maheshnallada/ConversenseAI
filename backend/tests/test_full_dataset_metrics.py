@@ -47,11 +47,11 @@ def test_full_dataset_metrics_calculation():
     assert summary.total_telephony_duration_s > 2000.0
     # Two duration clocks are different
     assert summary.total_recording_duration_s != summary.total_telephony_duration_s
-    # Token totals are reported; incomplete pricing remains unavailable.
+    # Token totals and total cost are reported across all priced interactions.
     assert summary.total_input_tokens > 0
     assert summary.total_output_tokens > 0
-    assert summary.total_cost is None
-    assert summary.currency is None
+    assert summary.total_cost == pytest.approx(1.4626, abs=1e-4)
+    assert summary.currency == "USD"
 
 
 def test_observability_service_calculates_from_canonical_interaction_inputs():

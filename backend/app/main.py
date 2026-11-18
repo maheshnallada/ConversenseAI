@@ -1,4 +1,8 @@
 import os
+from app.core.env import load_env_file
+
+load_env_file()
+
 from app.api.app import create_app
 from app.storage.db import create_session_factory, init_db
 
