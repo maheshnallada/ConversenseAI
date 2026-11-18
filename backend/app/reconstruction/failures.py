@@ -46,6 +46,128 @@ def select_first_failure(
     return None, True
 
 
+def classify_unplayed_agent_turn(
+    turns: list[TranscriptTurn],
+    turn_index_in_list: int,
+    call_meta: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """
+    Determines whether an unplayed agent turn was an expected cancellation
+    (due to customer disconnect or customer interruption/barge-in) or a
+    genuine technical failure.
+
+    Returns:
+        tuple[reason_type, evidence_note]:
+        - "cancelled_customer_interrupted": customer interrupted or spoke concurrently.
+        - "cancelled_customer_disconnected": customer hung up / call ended around this turn.
+        - "cancelled_machine_voicemail": voicemail / machine screener answered.
+        - "technical_failure_unplayed": genuine technical failure where audio should have played.
+    """
+    meta = call_meta or {}
+    t = turns[turn_index_in_list]
+    t_start = t.start_s
+
+    # 1. Direct barge-in flag on the turn
+    if t.barged_in is True:
+        return (
+            "cancelled_customer_interrupted",
+            "Agent playback cancelled because customer barged in",
+        )
+
+    # 2. Check surrounding customer turns for interruption / concurrent speech
+    for j in (turn_index_in_list - 1, turn_index_in_list + 1):
+        if 0 <= j < len(turns):
+            other = turns[j]
+            if other.speaker == "customer":
+                o_start = other.start_s
+                o_end = other.end_s
+                if o_start is not None and t_start is not None:
+                    # Overlap or customer spoke within [-1.5, +1.5]s of agent start
+                    if abs(o_start - t_start) <= 1.5:
+                        return (
+                            "cancelled_customer_interrupted",
+                            f"Customer spoke at {o_start:.2f}s during/near agent turn start ({t_start:.2f}s)",
+                        )
+                    # Customer was speaking when agent turn queued
+                    if o_end is not None and (o_start <= t_start <= o_end + 0.5):
+                        return (
+                            "cancelled_customer_interrupted",
+                            f"Customer was speaking [{o_start:.2f}s - {o_end:.2f}s] when agent turn queued",
+                        )
+                    # Preceding customer turn occurred right before agent turn (<2.5s)
+                    if j == turn_index_in_list - 1 and 0 <= (t_start - o_start) <= 2.5:
+                        return (
+                            "cancelled_customer_interrupted",
+                            f"Customer turn at {o_start:.2f}s preceded unplayed agent turn at {t_start:.2f}s",
+                        )
+                elif other.barged_in is True:
+                    return (
+                        "cancelled_customer_interrupted",
+                        "Customer interruption flagged on adjacent turn",
+                    )
+
+    # 3. Check customer disconnect / call dropped
+    line_usage = meta.get("usage", {}).get("line", {}) if isinstance(meta.get("usage"), dict) else {}
+    call_timing = meta.get("call_timing", {}) if isinstance(meta.get("call_timing"), dict) else {}
+
+    ended_at_s = (
+        meta.get("ended_at_seconds")
+        or call_timing.get("ended_at_seconds")
+        or line_usage.get("connected_s")
+        or meta.get("connected_s")
+    )
+    if ended_at_s is not None:
+        try:
+            ended_at_s = float(ended_at_s)
+        except (ValueError, TypeError):
+            ended_at_s = None
+
+    end_reason = str(
+        meta.get("end_reason")
+        or call_timing.get("end_reason")
+        or meta.get("disposition")
+        or (meta.get("end_call") or {}).get("outcome")
+        or ""
+    ).lower()
+
+    # Machine / voicemail
+    if any(kw in end_reason for kw in ("voicemail", "machine", "screener")):
+        return (
+            "cancelled_machine_voicemail",
+            "Call was answered or terminated by machine/voicemail",
+        )
+
+    is_dropped = any(
+        kw in end_reason
+        for kw in ("drop", "hung_up", "hangup", "disconnect", "left")
+    )
+
+    # If call ended at or close to turn start
+    if ended_at_s is not None and t_start is not None:
+        if t_start >= (ended_at_s - 2.0):
+            return (
+                "cancelled_customer_disconnected",
+                f"Customer disconnected at {ended_at_s:.2f}s (turn start {t_start:.2f}s)",
+            )
+
+    # Check if any subsequent agent turns were actually heard
+    subsequent_played = any(
+        turns[k].speaker == "agent" and turns[k].playback_spoken == "heard"
+        for k in range(turn_index_in_list + 1, len(turns))
+    )
+
+    if is_dropped and not subsequent_played:
+        return (
+            "cancelled_customer_disconnected",
+            "Call disconnected/dropped before agent line could be played",
+        )
+
+    return (
+        "technical_failure_unplayed",
+        "Agent line was queued during active call but never played to customer",
+    )
+
+
 def detect_failures(
     turns: list[TranscriptTurn],
     call_meta: dict[str, Any] | None = None,
@@ -106,16 +228,18 @@ def detect_failures(
                         evidence=f"Agent speech cut during playback; partial heard: '{heard_text or ''}'",
                     )
                 )
-            elif t.playback_spoken == "not_played":
-                failures.append(
-                    FailureRecord(
-                        failure_type="AGENT_LINE_NOT_PLAYED",
-                        category=FailureCategory.TECHNICAL,
-                        turn_index=t.turn_index,
-                        time_s=t_time,
-                        evidence="Agent line was queued but never played to customer",
+            elif t.playback_spoken in {"not_played", "no_audio"}:
+                reason, note = classify_unplayed_agent_turn(turns, i, meta)
+                if reason == "technical_failure_unplayed":
+                    failures.append(
+                        FailureRecord(
+                            failure_type="AGENT_LINE_NOT_PLAYED",
+                            category=FailureCategory.TECHNICAL,
+                            turn_index=t.turn_index,
+                            time_s=t_time,
+                            evidence=note,
+                        )
                     )
-                )
 
             # Check agent repetition
             if prev_agent_text and len(t.normalized_text) > 8 and t.normalized_text == prev_agent_text:

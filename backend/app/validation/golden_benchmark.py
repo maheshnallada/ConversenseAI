@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass, replace
+import logging
 from pathlib import Path
 from typing import Literal
 
@@ -14,6 +15,8 @@ from app.storage.evaluation_repo import EvaluationRepository
 from app.storage.golden_repo import GoldenDatasetRepository
 from app.validation.benchmark import BenchmarkEngine
 from app.validation.golden_loader import load_golden_dataset
+
+logger = logging.getLogger(__name__)
 
 _EXPECTED_BATCHES = frozenset(_BATCH_MODELS)
 
@@ -94,20 +97,52 @@ class GoldenDatasetBenchmarkService:
                                 record.evaluation_input.turns,
                                 evaluation_namespace=namespace,
                             )
-                    except Exception:
+                    except Exception as exc:
+                        logger.exception(
+                            "Evaluation failed for record %s: %s",
+                            record.label.call_id,
+                            exc,
+                        )
                         return GoldenRecordResult(
                             call_id=record.label.call_id,
                             evaluation_status="failed",
-                            error="Golden record evaluation failed.",
+                            error=f"Golden record evaluation failed: {exc}",
                         )
 
                     ready = self._is_ready(run)
+                    error_msg = None
+                    if not ready:
+                        if run is None:
+                            error_msg = "Evaluation run was not created."
+                        else:
+                            failed_batches = [
+                                f"{b.batch_name} ({b.status}): {b.error_message or 'missing parsed output'}"
+                                for b in run.batches
+                                if b.status not in ("completed", "review_required")
+                                or b.parsed_output is None
+                            ]
+                            missing_batches = _EXPECTED_BATCHES - {
+                                b.batch_name for b in run.batches
+                            }
+                            details = []
+                            if failed_batches:
+                                details.extend(failed_batches)
+                            if missing_batches:
+                                details.append(
+                                    f"Missing batches: {', '.join(sorted(missing_batches))}"
+                                )
+                            error_msg = (
+                                f"Golden record evaluation incomplete: {'; '.join(details)}"
+                                if details
+                                else "Golden record evaluation failed."
+                            )
+
                     return GoldenRecordResult(
                         call_id=record.label.call_id,
                         evaluation_status="ready" if ready else "failed",
-                        evaluation_run_id=run.run_id,
+                        evaluation_run_id=run.run_id if run else None,
                         reused=reused,
-                        error=None if ready else "Golden record evaluation failed.",
+                        error=error_msg,
                     )
 
             return await asyncio.gather(*(process(record) for record in dataset.records))
@@ -211,5 +246,9 @@ class GoldenDatasetBenchmarkService:
             run is not None
             and len(run.batches) == len(_EXPECTED_BATCHES)
             and {batch.batch_name for batch in run.batches} == _EXPECTED_BATCHES
-            and all(batch.status == "completed" for batch in run.batches)
+            and all(
+                batch.status in ("completed", "review_required")
+                and batch.parsed_output is not None
+                for batch in run.batches
+            )
         )

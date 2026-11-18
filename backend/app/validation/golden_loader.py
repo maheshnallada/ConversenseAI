@@ -130,6 +130,34 @@ def _build_events(call_id: str, call_data: dict[str, Any]) -> list[InteractionEv
         if item.get("t") is not None:
             event.occurred_at = _parse_iso_datetime(item.get("t"))
         events.append(event)
+
+    meta = call_data.get("meta") if isinstance(call_data.get("meta"), dict) else {}
+    end_call = meta.get("end_call") or call_data.get("end_call")
+    if isinstance(end_call, dict):
+        rec = end_call.get("record") or {}
+        outcome = end_call.get("outcome") or rec.get("outcome")
+        expert_call_at = rec.get("expert_call_at")
+        if not expert_call_at and end_call.get("commitments"):
+            for comm in end_call.get("commitments"):
+                if isinstance(comm, dict) and comm.get("date"):
+                    expert_call_at = f"{comm.get('date')}T11:00:00+05:30"
+                    break
+        if outcome == "CALLBACK_BOOKED" or expert_call_at:
+            events.append(
+                InteractionEvent(
+                    event_id=f"{call_id}_booking",
+                    event_type="appointment.booked",
+                    occurred_at=_parse_iso_datetime(call_data.get("ended_at") or call_data.get("started_at")),
+                    payload={
+                        "appointment_at": expert_call_at,
+                        "outcome": outcome,
+                        "commitments": end_call.get("commitments", []),
+                        "summary": end_call.get("summary"),
+                        "closing_line": end_call.get("closing_line"),
+                        "record": rec,
+                    },
+                )
+            )
     return events
 
 
@@ -175,19 +203,36 @@ def load_golden_dataset(csv_path: Path | str, tenant_id: str = "tenant_default")
                 language_slice = (row.get("language_slice") or row.get("Language slice") or "").strip() or None
                 if conversation_status is not None and conversation_status not in get_args(ConversationStatus):
                     raise ValueError(f"Conversation status {conversation_status!r} is invalid for call {raw_call_id!r}.")
+                ftw_line_raw = str(row.get("gold_first_thing_wrong_line") or row.get("First thing wrong: line") or "").strip()
+                ftw_line = None
+                if ftw_line_raw:
+                    try:
+                        ftw_line = int(float(ftw_line_raw))
+                    except (ValueError, TypeError):
+                        ftw_line = None
+
+                first_thing_wrong_category = (
+                    str(row.get("gold_first_thing_wrong_category") or row.get("gold_first_thing_wrong_what") or "").strip() or None
+                )
+                first_thing_wrong_what = (
+                    str(row.get("gold_first_thing_wrong_what") or row.get("gold_first_thing_wrong_category") or row.get("First thing wrong: what") or "").strip() or None
+                )
+                first_thing_wrong_desc = (
+                    str(row.get("gold_first_thing_wrong_description") or "").strip() or None
+                )
                 label = GoldenCallLabel(
                     call_id=raw_call_id,
                     what_happened=str(row.get("gold_what_happened") or row.get("What happened") or "").strip(),
                     correct_outcome=str(row.get("gold_correct_outcome") or row.get("Correct outcome") or "").strip(),
-                    facts_customer_gave=str(row.get("gold_facts_the_customer_gave") or row.get("Facts the customer gave") or "").strip(),
+                    facts_customer_gave=str(row.get("gold_facts_the_customer_gave") or row.get("gold_customer_facts") or row.get("Facts the customer gave") or "").strip(),
                     sentiment=str(row.get("gold_sentiment") or row.get("Sentiment") or "").strip() or "Neutral",
                     emotion=str(row.get("gold_emotion") or row.get("Emotion") or "").strip() or "Neutral",
                     overall=str(row.get("gold_overall") or row.get("Overall") or "").strip() or "Good",
-                    first_thing_wrong_line=(
-                        int(value) if (value := str(row.get("gold_first_thing_wrong_line") or row.get("First thing wrong: line") or "").strip()) and value.isdigit() else None
-                    ),
-                    first_thing_wrong_what=str(row.get("gold_first_thing_wrong_what") or row.get("First thing wrong: what") or "").strip() or None,
-                    never_rule_broken=str(row.get("gold_never-rule_broken") or row.get("Never-rule broken") or "").strip() or "None",
+                    first_thing_wrong_line=ftw_line,
+                    first_thing_wrong_what=first_thing_wrong_what,
+                    first_thing_wrong_category=first_thing_wrong_category,
+                    first_thing_wrong_description=first_thing_wrong_desc,
+                    never_rule_broken=str(row.get("gold_never-rule_broken") or row.get("gold_never_rule_broken") or row.get("Never-rule broken") or "").strip() or "None",
                     reviewer_notes=(row.get("gold_human_review_notes") or "").strip() or None,
                     conversation_status=conversation_status,
                     language_slice=language_slice,

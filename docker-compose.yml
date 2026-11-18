@@ -16,6 +16,19 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: conversense_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -24,16 +37,111 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg://conversense:conversense_secret@db:5432/conversense
+      REDIS_URL: redis://redis:6379/0
       ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
+      LLM_BASE_URL: https://api.portkey.ai/v1
+      LLM_API_KEY: KEY
+      LLM_MODEL: gpt-4o-mini
+      LLM_PROVIDER: "@entropy-ai"
     ports:
       - "8000:8000"
     volumes:
       - artifacts_data:/app/backend/storage/artifacts
       - ./data:/app/data:ro
+      - ./configs:/app/configs:ro
+
+  outbox-relay:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: conversense_outbox_relay
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://conversense:conversense_secret@db:5432/conversense
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
+      LLM_BASE_URL: https://api.portkey.ai/v1
+      LLM_API_KEY: KEY
+      LLM_MODEL: gpt-4o-mini
+      LLM_PROVIDER: "@entropy-ai"
+    command: ["python", "-m", "app.workers.cli", "--role", "outbox"]
+
+  worker-general:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: conversense_worker_general
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://conversense:conversense_secret@db:5432/conversense
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
+      LLM_BASE_URL: https://api.portkey.ai/v1
+      LLM_API_KEY: KEY
+      LLM_MODEL: gpt-4o-mini
+      LLM_PROVIDER: "@entropy-ai"
+    volumes:
+      - artifacts_data:/app/backend/storage/artifacts
+      - ./configs:/app/configs:ro
+    command: ["python", "-m", "app.workers.cli", "--role", "general"]
+
+  worker-evaluation:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: conversense_worker_evaluation
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://conversense:conversense_secret@db:5432/conversense
+      REDIS_URL: redis://redis:6379/0
+      EVALUATION_MAX_CONCURRENCY: 15
+      ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
+      LLM_BASE_URL: https://api.portkey.ai/v1
+      LLM_API_KEY: KEY
+      LLM_MODEL: gpt-4o-mini
+      LLM_PROVIDER: "@entropy-ai"
+    volumes:
+      - artifacts_data:/app/backend/storage/artifacts
+      - ./configs:/app/configs:ro
+    command: ["python", "-m", "app.workers.cli", "--role", "evaluation"]
+
+  worker-analytics:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: conversense_worker_analytics
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://conversense:conversense_secret@db:5432/conversense
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_STORAGE_PATH: /app/backend/storage/artifacts
+      LLM_BASE_URL: https://api.portkey.ai/v1
+      LLM_API_KEY: KEY
+      LLM_MODEL: gpt-4o-mini
+      LLM_PROVIDER: "@entropy-ai"
+    command: ["python", "-m", "app.workers.cli", "--role", "analytics"]
 
 volumes:
   pgdata:
+  redis_data:
   artifacts_data:
-

@@ -417,18 +417,33 @@ def _quality_assessment(batch: Any) -> tuple[str, list[int | None]]:
     dimensions = _as_mapping(quality_data.get("dimensions"))
     scores: list[int | None] = []
     if dimensions is not None:
-        for value in dimensions.values():
+        for dim_name, value in dimensions.items():
             dimension = _as_mapping(value)
-            scores.append(dimension.get("score") if dimension else None)
+            score = dimension.get("score") if dimension else None
+            # Guard against invalid penalty on closing_quality when customer cut/disconnected mid-closing
+            if dim_name == "closing_quality" and score is not None and score <= 2 and dimension:
+                reason_lower = str(dimension.get("reason", "")).lower()
+                if any(kw in reason_lower for kw in (
+                    "cut", "customer cut", "customer hung", "hung up", "hang up",
+                    "not finalize", "didn't finalize", "did not finalize",
+                    "no proper closing", "partially", "mid-sentence", "disconnect"
+                )):
+                    # When agent thanked the customer or delivered closing but was cut off by customer hangup,
+                    # score <= 2 is an unfair penalty on a normal customer disconnect.
+                    score = None
+            scores.append(score)
     elif isinstance(quality_data.get("scores"), list):
         scores = quality_data["scores"]
-    if not scores or any(score is None for score in scores):
+    if not scores:
         return "Can't tell", scores
-    if any(type(score) is not int or score < 1 or score > 5 for score in scores):
+    valid_scores = [s for s in scores if isinstance(s, int) and 1 <= s <= 5]
+    if not valid_scores:
         return "Can't tell", scores
-    if any(score <= 2 for score in scores):
+    if any(s <= 2 for s in valid_scores):
         return "Bad", scores
-    if any(score == 3 for score in scores):
+    if any(s == 3 for s in valid_scores):
+        return "OK", scores
+    if len(valid_scores) < len(scores):
         return "OK", scores
     return "Good", scores
 
@@ -441,6 +456,116 @@ def _batch_outcome(batch: Any, key: str) -> Any:
     if outcome is not None:
         return outcome.get("label")
     return data.get(key)
+
+
+INTRODUCTORY_ONLY_EXAMPLES = {
+    "hello",
+    "hello hello",
+    "haan",
+    "haanji",
+    "yes",
+    "ji",
+    "kaun",
+    "kaun bol rahe ho",
+    "who is this",
+    "kahan se",
+    "aawaz nahi aa rahi",
+}
+
+
+def validate_what_happened_guard(
+    current_label: str,
+    outcome: str | None,
+    batch_results: Mapping[str, Any],
+    timeline: ReconstructedTimeline | None,
+) -> str:
+    """
+    Deterministic post-LLM validation rule for 'What happened' per Section 5.3:
+    1. Check if machine or call screener answered.
+    2. Check if no agent speech played.
+    3. Check if agent's first words came late (>3s).
+    4. Check whether the customer left prematurely vs reached an ending.
+    5. If customer left and zero customer speech words: 'Left during first line, said nothing'.
+    6. If customer left and customer speech consists only of greeting, identity confirmation,
+       caller-id question, or generic acknowledgment: 'Said hello or a few words, then left'.
+    7. If customer left after at least one substantive domain answer: 'Gave a real answer, then left before an ending'.
+    8. If a terminal outcome/closing was reached: 'Call reached an ending'.
+    """
+    # 1. Machine or call screener answered
+    if outcome in ("Voicemail", "Call screener or machine"):
+        return "Machine or call screener answered"
+
+    # 2. Heard nothing from agent / late opening
+    if timeline and timeline.first_technical_failure:
+        ft = timeline.first_technical_failure.failure_type
+        if ft in ("NO_AGENT_AUDIO_PLAYED", "NO_AGENT_AUDIO"):
+            return "Heard nothing from the agent"
+        if ft == "LATE_AGENT_OPENING" and current_label in ("Can't tell", "Call reached an ending"):
+            return "Agent's first words came late (over 3s)"
+
+    # 3. Check customer turns from timeline events
+    understanding = _as_mapping(batch_results.get("conversation_understanding")) or {}
+    cust_facts = understanding.get("customer_facts") or []
+    has_substantive_facts = bool(cust_facts and len(cust_facts) > 0)
+
+    quality = _as_mapping(batch_results.get("conversation_quality")) or {}
+    completeness = _as_mapping(quality.get("conversation_completeness")) or {}
+    conv_status = completeness.get("conversation_status")
+
+    # Determine if customer left prematurely
+    is_premature_exit = (
+        outcome in ("No outcome: customer left first", "Can't tell")
+        or conv_status in (
+            "CUSTOMER_LEFT_DURING_OPENING",
+            "CUSTOMER_LEFT_DURING_DISCUSSION",
+            "NO_MEANINGFUL_INTERACTION",
+        )
+    )
+
+    # Collect customer utterances
+    customer_texts: list[str] = []
+    events = getattr(timeline, "events", None) or []
+    customer_turn_count = getattr(timeline, "customer_turn_count", None)
+    for ev in events:
+        if getattr(ev, "event_type", None) == "turn" and getattr(ev, "speaker", None) == "customer":
+            text = getattr(ev, "text", None)
+            if text and text.strip():
+                customer_texts.append(text.strip())
+
+    if is_premature_exit:
+        if customer_turn_count == 0 or (events and not customer_texts):
+            return "Left during first line, said nothing"
+
+        if has_substantive_facts:
+            return "Gave a real answer, then left before an ending"
+
+        def is_introductory(text: str) -> bool:
+            cleaned = "".join(c.lower() for c in text if c.isalnum() or c.isspace()).strip()
+            if cleaned in INTRODUCTORY_ONLY_EXAMPLES:
+                return True
+            words = cleaned.split()
+            if len(words) <= 3 and any(w in INTRODUCTORY_ONLY_EXAMPLES for w in words):
+                return True
+            if any(kw in cleaned for kw in ("bol raha", "bol rahi", "speaking", "this is", "who is")):
+                return True
+            return False
+
+        if customer_texts and all(is_introductory(t) for t in customer_texts):
+            return "Said hello or a few words, then left"
+
+        if current_label in ("Said hello or a few words, then left", "Gave a real answer, then left before an ending"):
+            return current_label
+
+        return current_label
+
+    # Terminal outcome / closing reached
+    if outcome in ("Expert call booked", "Call later agreed", "Do not call"):
+        return "Call reached an ending"
+
+    if outcome == "Not interested" and conv_status in ("COMPLETED", "OUTCOME_REACHED_BUT_NOT_CLOSED"):
+        return "Call reached an ending"
+
+    return current_label
 
 
 def derive_evaluation_summary(
@@ -511,12 +636,12 @@ def derive_evaluation_summary(
     what_happened_data = _as_mapping(quality_data.get("what_happened")) or {}
     what_happened_label: str = str(what_happened_data.get("label") or "Can't tell")
 
-    if timeline and timeline.first_technical_failure:
-        ft = timeline.first_technical_failure.failure_type
-        if ft == "NO_AGENT_AUDIO_PLAYED":
-            what_happened_label = "Heard nothing from the agent"
-        elif ft == "LATE_AGENT_OPENING" and what_happened_label in ("Can't tell", "Call reached an ending"):
-            what_happened_label = "Agent's first words came late (over 3s)"
+    understanding = batch_results.get("conversation_understanding")
+    outcome = _batch_outcome(understanding, "outcome")
+
+    what_happened_label = validate_what_happened_guard(
+        what_happened_label, outcome, batch_results, timeline
+    )
 
     # 1. Technical failure candidate
     tech_candidate: FailureCandidate | None = None
@@ -578,6 +703,57 @@ def derive_evaluation_summary(
             )
         )
         if not has_issue:
+            mapped_conv = "NONE"
+
+    # Special treatment for AGENT_AUDIO_NOT_PLAYED:
+    # Only valid if there was a genuine technical failure (not an expected cancellation
+    # due to customer disconnect, customer interruption/barge-in, or voicemail)
+    if mapped_conv == "AGENT_AUDIO_NOT_PLAYED":
+        ev_lower = (candidate_desc + " " + candidate_quote).lower()
+        is_cancellation = any(
+            kw in ev_lower
+            for kw in (
+                "disconnect",
+                "hung up",
+                "hang up",
+                "hung_up",
+                "cut the call",
+                "dropped",
+                "left first",
+                "interrupted",
+                "barge",
+                "cancelled",
+                "voicemail",
+            )
+        )
+        has_tech_unplayed = any(
+            getattr(tf, "failure_type", "") in ("AGENT_LINE_NOT_PLAYED", "AGENT_AUDIO_NOT_PLAYED")
+            for tf in technical_failures
+        )
+        if is_cancellation or not has_tech_unplayed:
+            mapped_conv = "NONE"
+
+    # Special treatment for AGENT_AUDIO_CUT_OFF:
+    # Only valid if cut disrupted substantive conversation (not when customer disconnected on closing/goodbye)
+    if mapped_conv == "AGENT_AUDIO_CUT_OFF":
+        ev_lower = (candidate_desc + " " + candidate_quote).lower()
+        is_closing_cut = any(
+            kw in ev_lower
+            for kw in (
+                "closing",
+                "farewell",
+                "thank you",
+                "goodbye",
+                "thanked the customer",
+                "finalize the call",
+                "customer cut",
+                "customer hung up",
+                "customer disconnected",
+                "hung up",
+                "ended the call",
+            )
+        )
+        if is_closing_cut:
             mapped_conv = "NONE"
 
     conversational_failure_category = mapped_conv
@@ -675,10 +851,36 @@ def derive_evaluation_summary(
         ),
     }
 
+    bad_ftw = {
+        "AGENT_AUDIO_NOT_PLAYED",
+        "AGENT_REPEATED_QUESTION",
+        "INAPPROPRIATE_POST_BOOKING_QUESTION",
+        "IGNORED_CUSTOMER_INFORMATION",
+        "BOOKING_WITHOUT_CONSENT",
+        "POLICY_OR_INSURER_PUSHING",
+        "PREMIUM_FIGURE_DISCLOSURE",
+        "SENSITIVE_INFORMATION_REQUEST",
+    }
+
     if not all_batches_present:
         review_reasons.append("One or more evaluation batches are unavailable")
         overall: Literal["Good", "OK", "Bad", "Can't tell"] = "Can't tell"
-    elif critical_issues or quality_assessment == "Bad":
+    elif (
+        what_happened_data.get("label") == "Can't tell"
+        and outcome == "Can't tell"
+    ) or what_happened_label == "Heard nothing from the agent":
+        overall = "Can't tell"
+    elif (
+        critical_issues
+        or quality_assessment == "Bad"
+        or (
+            first_thing_wrong_category in bad_ftw
+            and not (
+                what_happened_label == "Call reached an ending"
+                and outcome in ("Expert call booked", "Do not call")
+            )
+        )
+    ):
         overall = "Bad"
     elif quality_assessment == "Can't tell":
         overall = "Can't tell"
@@ -688,8 +890,21 @@ def derive_evaluation_summary(
         conv_status = completeness.get("conversation_status")
         if conv_status not in ("NO_MEANINGFUL_INTERACTION", "MACHINE_OR_VOICEMAIL"):
             review_reasons.append("Conversation quality is not fully evaluable")
+    elif (
+        quality_assessment == "Good"
+        and first_thing_wrong_category == "NONE"
+        and what_happened_label == "Call reached an ending"
+        and not critical_issues
+    ):
+        overall = "Good"
+    elif (
+        quality_assessment == "Good"
+        and first_thing_wrong_category == "NONE"
+        and not critical_issues
+    ):
+        overall = "Good"
     else:
-        overall = quality_assessment
+        overall = "OK"
 
     return EvaluationSummary(
         overall_assessment=overall,

@@ -132,6 +132,13 @@ export default function TimelineTurnCard({
       {/* Turn Header */}
       <div className="p-3.5 pb-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Turn Line Number Pill */}
+          {(meta.line != null || meta.turn_index != null) && (
+            <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700/60">
+              #{meta.line ?? (meta.turn_index + 1)}
+            </span>
+          )}
+
           {/* Speaker Avatar Badge */}
           <div
             className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-sm ${

@@ -215,7 +215,7 @@ class EvaluationRunRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
     evaluation_namespace: Mapped[str] = mapped_column(
-        String(64),
+        String(128),
         default="interaction",
         server_default="interaction",
     )
@@ -245,7 +245,7 @@ class EvaluationBatchRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     interaction_id: Mapped[str] = mapped_column(String(128), index=True)
     evaluation_namespace: Mapped[str] = mapped_column(
-        String(64),
+        String(128),
         default="interaction",
         server_default="interaction",
     )
@@ -301,6 +301,8 @@ class GoldenCallLabelRow(Base):
     overall: Mapped[str] = mapped_column(String(32))
     first_thing_wrong_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     first_thing_wrong_what: Mapped[str | None] = mapped_column(Text, nullable=True)
+    first_thing_wrong_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_thing_wrong_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     never_rule_broken: Mapped[str] = mapped_column(String(128), default="None")
     reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     conversation_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -324,5 +326,33 @@ class HumanReviewRow(Base):
     reviewer_name: Mapped[str] = mapped_column(String(128))
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PipelineStageRow(Base):
+    __tablename__ = "pipeline_stage_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "interaction_id",
+            "stage_name",
+            name="uq_pipeline_stage_interaction",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    interaction_id: Mapped[str] = mapped_column(String(128), index=True)
+    stage_name: Mapped[str] = mapped_column(String(64), index=True)  # "general", "evaluation", "analytics"
+    status: Mapped[str] = mapped_column(String(32), index=True)  # "pending", "running", "completed", "failed", "dead_letter"
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
 
 

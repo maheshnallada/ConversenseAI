@@ -433,3 +433,59 @@ def test_customer_interruption_without_actual_issue_is_not_treated_as_failure():
     )
     assert summary.conversational_failure_category == "NONE"
     assert summary.first_thing_wrong_category == "NONE"
+
+
+def test_closing_cut_by_customer_hangup_is_not_penalized_as_bad():
+    batch_results = {
+        "conversation_understanding": {
+            "outcome": {"label": "Not interested"},
+            "sentiment": {"label": "Neutral"},
+            "emotion": {"label": "Disengaged"},
+        },
+        "conversation_quality": {
+            "dimensions": {
+                "clarity": {"score": 4, "reason": "Clear"},
+                "relevance": {"score": 4, "reason": "Relevant"},
+                "empathy": {"score": 4, "reason": "Polite"},
+                "professionalism": {"score": 4, "reason": "Professional"},
+                "responsiveness": {"score": 4, "reason": "Responsive"},
+                "closing_quality": {
+                    "score": 2,
+                    "reason": "There was no proper closing; the agent thanked the customer but did not finalize the call because customer cut the call.",
+                },
+            },
+            "what_happened": {"label": "Call reached an ending"},
+            "first_thing_wrong": {"category": "NONE"},
+        },
+        "compliance_appointment": {
+            "compliance": {"rule_results": {}},
+        },
+    }
+    summary = derive_evaluation_summary(
+        batch_results=batch_results,
+        timeline=None,
+        appointment_validation=None,
+    )
+    # The spurious closing penalty (2/5 for customer hanging up on thank-you) must NOT force Bad
+    assert summary.overall_assessment in ("OK", "Good")
+    assert summary.overall_assessment != "Bad"
+
+
+def test_agent_audio_cut_off_on_closing_farewell_is_treated_as_none():
+    batch_results = {
+        "conversation_quality": {
+            "first_thing_wrong": {
+                "category": "AGENT_AUDIO_CUT_OFF",
+                "line": 7,
+                "quote": "ठीक है, आपने time दिया उसके लिए thank you। आपका",
+                "description": "Agent closing was cut off because customer hung up after being thanked",
+            }
+        }
+    }
+    summary = derive_evaluation_summary(
+        batch_results=batch_results,
+        timeline=None,
+        appointment_validation=None,
+    )
+    assert summary.conversational_failure_category == "NONE"
+    assert summary.first_thing_wrong_category == "NONE"

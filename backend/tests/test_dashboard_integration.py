@@ -173,7 +173,7 @@ def test_dashboard_reads_batched_run_reviews_and_file_scoped_benchmark(
     benchmark = _route(app, "/api/v1/golden-dataset/benchmark", "GET")(
         "tenant_dashboard"
     )
-    assert benchmark["total_interactions"] == 25
+    assert benchmark["total_interactions"] == 50
     assert set(benchmark["dimension_metrics"]) == {
         "correct_outcome",
         "sentiment",
@@ -191,7 +191,7 @@ def test_golden_import_route_returns_summary_errors_and_report(
 ):
     csv_path = (
         Path(__file__).resolve().parents[2]
-        / "Conversense_AI_25_Records_Input_and_Golden.csv"
+        / "Conversense_AI_50_Records_Input_and_Golden.csv"
     )
     expected = GoldenBenchmarkImportResult(
         dataset_hash="dataset-hash",

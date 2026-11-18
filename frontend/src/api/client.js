@@ -181,4 +181,22 @@ export const api = {
       body: csvPath ? JSON.stringify({ csv_path: csvPath }) : undefined,
     }),
 
+  // Scaling & Queue Operations
+  getQueueStats: (tenant = 'health_campaign') =>
+    request('/queue/stats', { headers: { 'X-Tenant-Id': tenant } }),
+
+  getDLQ: (limit = 100, tenant = 'health_campaign') =>
+    request(`/queue/dlq?limit=${limit}`, { headers: { 'X-Tenant-Id': tenant } }),
+
+  replayQueueJob: (interactionId, targetStage = 'general', tenant = 'health_campaign') =>
+    request('/queue/replay', {
+      method: 'POST',
+      headers: { 'X-Tenant-Id': tenant },
+      body: JSON.stringify({ interaction_id: interactionId, target_stage: targetStage }),
+    }),
+
+  getInteractionStages: (interactionId, tenant = 'health_campaign') =>
+    request(`/interactions/${encodeURIComponent(interactionId)}/stages`, {
+      headers: { 'X-Tenant-Id': tenant },
+    }),
 };

@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from uuid import uuid4
 
+from openai import BaseModel
+
+from app.core.logging import call_id_ctx, criteria_ctx
 from app.domain.envelope import InteractionEnvelope
 from app.domain.evaluation import EvaluationBatchRecord, EvaluationRun
 from app.domain.transcript import TranscriptTurn
@@ -20,6 +23,7 @@ from app.evaluation.llm_client import (
     complete_structured_with_usage,
 )
 from app.evaluation.prompts import BATCH_SYSTEM_PROMPTS
+from app.reconstruction.failures import classify_unplayed_agent_turn
 from app.evaluation.schemas import (
     AppointmentInterpretation,
     Compliance,
@@ -86,7 +90,18 @@ class EvaluatorRegistry:
             domain_data.get("timezone")
             if isinstance(domain_data, dict)
             else None
-        ) or meta.get("timezone") or "unknown"
+        ) or meta.get("timezone")
+
+        if not timezone_name or timezone_name == "unknown":
+            if interaction.started_at and interaction.started_at.tzinfo:
+                tz_str = str(interaction.started_at.tzinfo)
+                if "+05:30" in tz_str or "UTC+05:30" in tz_str:
+                    timezone_name = "Asia/Kolkata"
+                else:
+                    timezone_name = tz_str
+            else:
+                timezone_name = "Asia/Kolkata"
+
         booking_event = next(
             (
                 event.model_dump(mode="json")
@@ -95,6 +110,63 @@ class EvaluatorRegistry:
             ),
             None,
         )
+
+        if booking_event is None:
+            end_call = meta.get("end_call") or domain_data.get("end_call")
+            if isinstance(end_call, dict):
+                outcome = str(end_call.get("outcome") or "").strip().upper()
+                rec = (
+                    end_call.get("record")
+                    if isinstance(end_call.get("record"), dict)
+                    else {}
+                )
+                expert_call_at = (
+                    rec.get("expert_call_at")
+                    or end_call.get("expert_call_at")
+                    or rec.get("appointment_at")
+                    or end_call.get("appointment_at")
+                )
+                call_later_at = rec.get("call_later_at") or end_call.get("call_later_at")
+
+                occurred_at = (
+                    interaction.ended_at.isoformat()
+                    if interaction.ended_at
+                    else (
+                        interaction.started_at.isoformat()
+                        if interaction.started_at
+                        else None
+                    )
+                )
+
+                if outcome in {"CALLBACK_BOOKED", "APPOINTMENT_BOOKED"} or expert_call_at:
+                    booking_event = {
+                        "event_id": f"{interaction.interaction_id}_booking",
+                        "event_type": "appointment.booked",
+                        "occurred_at": occurred_at,
+                        "payload": {
+                            "appointment_at": expert_call_at,
+                            "outcome": outcome or "CALLBACK_BOOKED",
+                            "commitments": end_call.get("commitments", []),
+                            "summary": end_call.get("summary"),
+                            "closing_line": end_call.get("closing_line"),
+                            "record": rec,
+                        },
+                    }
+                elif outcome == "CALL_LATER" or call_later_at:
+                    booking_event = {
+                        "event_id": f"{interaction.interaction_id}_callback",
+                        "event_type": "callback.scheduled",
+                        "occurred_at": occurred_at,
+                        "payload": {
+                            "callback_at": call_later_at,
+                            "outcome": outcome or "CALL_LATER",
+                            "commitments": end_call.get("commitments", []),
+                            "summary": end_call.get("summary"),
+                            "closing_line": end_call.get("closing_line"),
+                            "record": rec,
+                        },
+                    }
+
         return call_date, timezone_name, json.dumps(booking_event, ensure_ascii=False)
 
     @staticmethod
@@ -173,37 +245,128 @@ class EvaluatorRegistry:
         if end_reason == "dropped":
             end_reason = "call_dropped"
 
+        first_agent_audible_s = None
+        first_customer_speech_s = None
+        for t in turns:
+            spk = (t.speaker or "").lower()
+            if first_agent_audible_s is None and spk == "agent":
+                if t.playback_spoken in ("heard", "cut") or (
+                    t.playback_spoken is None and t.raw_text and t.raw_text.strip()
+                ):
+                    if t.start_s is not None:
+                        first_agent_audible_s = round(t.start_s, 3)
+            if first_customer_speech_s is None and spk in ("customer", "user"):
+                if t.start_s is not None:
+                    first_customer_speech_s = round(t.start_s, 3)
+
+        if first_agent_audible_s is None and timeline and timeline.first_agent_speech_s is not None:
+            first_agent_audible_s = round(timeline.first_agent_speech_s, 3)
+
+        first_agent_delay_ref = (
+            "answered_at_seconds"
+            if answered_at_s is not None
+            else ("call_started" if interaction.started_at else None)
+        )
+
         events: list[dict[str, Any]] = []
         for idx, t in enumerate(turns, start=1):
             line_num = idx
             speaker = t.speaker.lower() if t.speaker else "unknown"
             if speaker == "agent":
                 status = t.playback_spoken or "heard"
-                heard_text = None if status == "heard" else t.playback_heard_text
                 barged_in = (
                     bool(t.barged_in)
                     if t.barged_in is not None
                     else (status == "cut")
                 )
-                events.append(
-                    {
-                        "line": line_num,
-                        "speaker": "agent",
-                        "timestamp_seconds": t.start_s,
-                        "duration_seconds": t.duration_s or t.audio_s,
-                        "generated_text": t.raw_text,
-                        "playback_status": status,
-                        "heard_text": heard_text,
-                        "barged_in": barged_in,
+
+                not_played_reason: str | None = None
+                cut_reason: str | None = None
+                if status in ("not_played", "silent", "no_audio"):
+                    customer_heard = False
+                    heard_text = ""
+                    meta_for_classify = {
+                        "ended_at_seconds": ended_at_s,
+                        "duration_seconds": duration_s,
+                        "end_reason": end_reason,
+                        "disposition": call_data.get("disposition"),
+                        **meta,
                     }
-                )
+                    reason_type, _ = classify_unplayed_agent_turn(
+                        turns, idx - 1, meta_for_classify
+                    )
+                    not_played_reason = reason_type
+                    if reason_type == "cancelled_customer_disconnected":
+                        text = "[AUDIO NOT PLAYED - CANCELLED: CUSTOMER DISCONNECTED]"
+                    elif reason_type == "cancelled_customer_interrupted":
+                        text = "[AUDIO NOT PLAYED - CANCELLED: CUSTOMER INTERRUPTED/BARGED IN]"
+                    elif reason_type == "cancelled_machine_voicemail":
+                        text = "[AUDIO NOT PLAYED - CANCELLED: MACHINE/VOICEMAIL]"
+                    else:
+                        text = "[AUDIO NOT PLAYED - CUSTOMER HEARD NOTHING (TECHNICAL FAULT)]"
+                elif status == "cut":
+                    customer_heard = True
+                    heard_text = t.playback_heard_text or ""
+
+                    # Check if this cut turn was a closing line where customer disconnected
+                    is_last_agent = not any(
+                        turns[k].speaker and turns[k].speaker.lower() == "agent"
+                        for k in range(idx, len(turns))
+                    )
+                    closing_keywords = (
+                        "thank you", "धन्यवाद", "दिन अच्छा रहे", "call करते हैं",
+                        "अलविदा", "bye", "good day", "day ahead", "time दिया"
+                    )
+                    is_closing_text = any(
+                        kw in (t.raw_text or "").lower() for kw in closing_keywords
+                    )
+                    is_near_call_end = (
+                        ended_at_s is not None
+                        and t.start_s is not None
+                        and t.start_s >= (ended_at_s - 4.0)
+                    ) or (idx >= len(turns) - 1)
+
+                    if is_last_agent and (is_closing_text or is_near_call_end):
+                        cut_reason = "customer_disconnected_during_closing"
+                        text = f"{heard_text} [AUDIO CUT: Customer disconnected while agent was speaking closing]"
+                    else:
+                        cut_reason = "customer_interrupted" if barged_in else None
+                        text = heard_text
+                else:
+                    customer_heard = True
+                    heard_text = t.raw_text
+                    text = t.raw_text
+
+                event_dict = {
+                    "line": line_num,
+                    "speaker": "agent",
+                    "timestamp_seconds": t.start_s,
+                    "duration_seconds": t.duration_s or t.audio_s,
+                    "text": text,
+                    "generated_text": t.raw_text,
+                    "heard_text": heard_text,
+                    "playback_status": status,
+                    "customer_heard": customer_heard,
+                    "not_played_reason": not_played_reason,
+                    "barged_in": barged_in,
+                }
+                if cut_reason:
+                    event_dict["cut_reason"] = cut_reason
+                events.append(event_dict)
             else:
                 events.append(
                     {
                         "line": line_num,
                         "speaker": speaker,
                         "timestamp_seconds": t.start_s,
+                        "duration_seconds": t.duration_s or t.audio_s,
                         "text": t.raw_text,
+                        "generated_text": None,
+                        "heard_text": None,
+                        "playback_status": "heard",
+                        "customer_heard": True,
+                        "not_played_reason": None,
+                        "barged_in": bool(t.barged_in) if t.barged_in is not None else False,
                     }
                 )
 
@@ -214,6 +377,9 @@ class EvaluatorRegistry:
                 "ended_at_seconds": ended_at_s,
                 "duration_seconds": duration_s,
                 "end_reason": end_reason,
+                "first_agent_audible_seconds": first_agent_audible_s,
+                "first_customer_speech_seconds": first_customer_speech_s,
+                "first_agent_delay_reference": first_agent_delay_ref,
             },
             "events": events,
         }
@@ -225,21 +391,26 @@ class EvaluatorRegistry:
         turns: list[TranscriptTurn],
         timeline: ReconstructedTimeline | None = None,
     ) -> list[dict[str, str]]:
-        transcript = self._transcript_text(turns)
+        payload = self._build_batch_two_payload(interaction, turns, timeline)
+        call_events_json = json.dumps(payload, ensure_ascii=False, indent=2)
+
         if batch_name == "conversation_understanding":
-            user_content = f"Evaluate this call.\nTRANSCRIPT:\n{transcript}"
+            user_content = (
+                f"Evaluate this call based on the call events, timing, and transcript details:\n"
+                f"{call_events_json}"
+            )
         elif batch_name == "conversation_quality":
-            payload = self._build_batch_two_payload(interaction, turns, timeline)
             user_content = (
                 f"Evaluate the following call events, timing, and playback details:\n"
-                f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+                f"{call_events_json}"
             )
         else:
             call_date, timezone_name, booking_event = self._booking_context(interaction)
             user_content = (
                 f"CALL DATE: {call_date}\nTIMEZONE: {timezone_name}\n"
-                f"BOOKING EVENT (may be null): {booking_event}\n"
-                f"TRANSCRIPT:\n{transcript}"
+                f"BOOKING EVENT (may be null): {booking_event}\n\n"
+                f"Evaluate the call based on the call events, timing, and playback details:\n"
+                f"{call_events_json}"
             )
         return [
             {"role": "system", "content": BATCH_SYSTEM_PROMPTS[batch_name]},
@@ -442,6 +613,37 @@ class EvaluatorRegistry:
         turns: list[TranscriptTurn],
         timeline: ReconstructedTimeline | None = None,
     ) -> EvaluationBatchRecord:
+        call_id = interaction.interaction_id
+        if interaction.domain_data and isinstance(interaction.domain_data, dict):
+            call_id = (
+                interaction.domain_data.get("call_id")
+                or interaction.domain_data.get("folder_name")
+                or call_id
+            )
+        call_token = call_id_ctx.set(str(call_id))
+        crit_token = criteria_ctx.set(batch_name)
+        try:
+            return await self._evaluate_batch_inner(
+                batch_name,
+                response_model,
+                interaction,
+                turns,
+                timeline,
+                str(call_id),
+            )
+        finally:
+            call_id_ctx.reset(call_token)
+            criteria_ctx.reset(crit_token)
+
+    async def _evaluate_batch_inner(
+        self,
+        batch_name: str,
+        response_model: type,
+        interaction: InteractionEnvelope,
+        turns: list[TranscriptTurn],
+        timeline: ReconstructedTimeline | None = None,
+        call_id: str | None = None,
+    ) -> EvaluationBatchRecord:
         started_at = datetime.now(timezone.utc)
         is_empty = not turns or not any(t.raw_text and t.raw_text.strip() for t in turns)
         is_unanswered = self._is_not_answered(interaction)
@@ -564,6 +766,11 @@ class EvaluatorRegistry:
                         "Batch %s validation failed on attempt 1 with issues: %s. Retrying with error context.",
                         batch_name,
                         validation.issues,
+                        extra={
+                            "call_id": call_id,
+                            "criteria": batch_name,
+                            "issues": validation.issues,
+                        },
                     )
                     error_details = "\n".join(f"- {issue}" for issue in validation.issues)
                     assistant_content = (
@@ -594,10 +801,24 @@ class EvaluatorRegistry:
             )
             completed_at = datetime.now(timezone.utc)
             result_data = result.model_dump(mode="json") if turns else None
+            batch_status = "review_required" if review_required else "completed"
+            logger.info(
+                "Batch %s evaluation completed with status=%s for call_id=%s (review_required=%s)",
+                batch_name,
+                batch_status,
+                call_id,
+                review_required,
+                extra={
+                    "call_id": call_id,
+                    "criteria": batch_name,
+                    "status": batch_status,
+                    "review_required": review_required,
+                },
+            )
             return EvaluationBatchRecord(
                 evaluation_id=str(uuid4()),
                 batch_name=batch_name,
-                status="review_required" if review_required else "completed",
+                status=batch_status,
                 model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
                 prompt_version=_PROMPT_VERSION,
                 schema_version=_SCHEMA_VERSION,
@@ -615,6 +836,17 @@ class EvaluatorRegistry:
                 review_reasons=validation.review_reasons,
             )
         except LLMError as error:
+            logger.error(
+                "Batch %s evaluation failed for call_id=%s: %s",
+                batch_name,
+                call_id,
+                error,
+                extra={
+                    "call_id": call_id,
+                    "criteria": batch_name,
+                    "error": str(error),
+                },
+            )
             completed_at = datetime.now(timezone.utc)
             return EvaluationBatchRecord(
                 evaluation_id=str(uuid4()),
